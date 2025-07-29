@@ -1,0 +1,21 @@
+_rf_diffusion_osr/
+│
+├── config.py               # All hyperparameters, file paths, and settings
+├── data_loader.py          # Pytorch Dataset and DataLoader preparation
+├── models/
+│   ├── __init__.py
+│   ├── complex_layers.py   # Core complex-valued layers (ComplexLinear, etc.)
+│   ├── feature_extractor.py# The DisentangledFeatureExtractor model
+│   └── diffusion_model.py  # The tfdiff_WiFi (HDT) model
+│
+├── utils/
+│   ├── __init__.py
+│   ├── loss_functions.py   # The CosineSimilarityLoss
+│   └── diffusion_helper.py # The SignalDiffusion class
+│
+├── engine.py               # Core training, validation, and inference functions
+│
+├── train.py                # Main script to run Phase 1 and Phase 2 training
+├── evaluate.py             # Main script for Phase 3 (threshold) & final evaluation
+│
+└── main_playground.ipynb   # The final Jupyter Notebook to run everything
