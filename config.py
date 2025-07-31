@@ -8,8 +8,18 @@ TEST_UNKNOWN_CLASS = 'DSSS'   # Used for final testing
 DATA_LEN = 512
 LABEL_LEN = 1
 
-# IMPORTANT: SET THE FULL PATH TO YOUR .mat FILE
-DATA_FILE_PATH = "alldata_withlabels_512samp_5dBto25dB_order.mat"
+# --- DATA AND CLASS CONFIGURATION ---
+# Paths for the main combined dataset (used for training and thresholding)
+DATA_FILE_PATHS = {
+    'path1': 'path/to/your/lte_bluetooth_le_wlan_mixeddata_withlabels_5dBto25dB_order.mat',
+    'path2': 'path/to/your/lte_bluetooth_le_wlan_mixeddata_withlabels_-10dBto0dB_order.mat'
+}
+
+# --- NEW: Add paths for the separate test dataset ---
+TEST_DATA_FILE_PATHS = {
+    'known': 'path/to/your/test_known_signals.mat',    # e.g., valid_close_test
+    'unknown': 'path/to/your/test_DSSS_signals.mat' # e.g., data_DSSS
+}
 
 # --- 2. MODEL ARCHITECTURE PARAMETERS ---
 # These must match for training and evaluation
