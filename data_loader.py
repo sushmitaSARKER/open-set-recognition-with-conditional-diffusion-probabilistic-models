@@ -48,42 +48,49 @@ class SignalDataset(Dataset):
 
 # --- MAIN DATALOADER PREPARATION FUNCTION ---
 
-def prepare_train_and_threshold_loaders(batch_size):
+def prepare_train_and_threshold_loaders(batch_size, train_ratio=0.8):
     """
-    Prepares the loaders for training and threshold calculation from the main dataset.
+    Prepares loaders for training (80%) and thresholding (20% + unknowns).
     """
-    print("--- Preparing Train and Threshold DataLoaders ---")
+    print("--- Preparing Train and Threshold DataLoaders with 80/20 Split ---")
     
-    # Load and process the two main data files
+    # 1. Load and process the two main data files
     data_part1 = load_and_process_single_file(config.DATA_FILE_PATHS['path1'])
     data_part2 = load_and_process_single_file(config.DATA_FILE_PATHS['path2'])
     
     if data_part1 is None or data_part2 is None:
         raise FileNotFoundError("Main data files could not be loaded. Please check paths in config.py.")
 
-    # Combine data and create labels/SNRs
     combined_data = np.concatenate((data_part1, data_part2), axis=1)
     signals_np = combined_data[:config.DATA_LEN, :]
     labels_int = np.argmax(np.abs(combined_data[config.DATA_LEN:, :]), axis=0).astype(int)
+    
     signals = torch.from_numpy(signals_np.T).to(torch.complex64)
     labels = torch.from_numpy(labels_int).to(torch.long)
     snrs_tensor = torch.zeros(len(labels), dtype=torch.long) # Placeholder for SNRs
 
-    # Create Train Set (Known classes only, shuffled)
-    known_indices = torch.cat([torch.where(labels == i)[0] for i in range(len(config.KNOWN_CLASSES_LIST))])
-    p = torch.randperm(len(known_indices))
-    train_indices = known_indices[p]
+    # 2. Get indices for all known and known-unknown classes
+    known_indices_all = torch.cat([torch.where(labels == i)[0] for i in range(len(config.KNOWN_CLASSES_LIST))])
+    known_unknown_indices = torch.where(labels == len(config.KNOWN_CLASSES_LIST))[0]
+    
+    # 3. Perform the 80/20 split ON THE KNOWN CLASSES ONLY
+    shuffled_indices = known_indices_all[torch.randperm(len(known_indices_all))]
+    split_idx = int(train_ratio * len(shuffled_indices))
+    train_indices = shuffled_indices[:split_idx]
+    valid_known_indices = shuffled_indices[split_idx:]
+    
+    # 4. Create the train_loader using the 80% split
     train_dataset = SignalDataset(signals[train_indices], labels[train_indices], snrs_tensor[train_indices])
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-    # Create Threshold Set (Knowns + "Known Unknowns" like Zigbee, not shuffled)
-    known_unknown_indices = torch.where(labels == len(config.KNOWN_CLASSES_LIST))[0]
-    thresh_indices = torch.cat([known_indices, known_unknown_indices])
+    # 5. Create the threshold_loader using the 20% validation split of knowns + all "known unknowns"
+    thresh_indices = torch.cat([valid_known_indices, known_unknown_indices])
     threshold_dataset = SignalDataset(signals[thresh_indices], labels[thresh_indices], snrs_tensor[thresh_indices])
     threshold_loader = DataLoader(threshold_dataset, batch_size=batch_size, shuffle=False)
     
-    print(f"  - Train Loader created with {len(train_loader.dataset)} samples.")
-    print(f"  - Threshold Loader created with {len(threshold_loader.dataset)} samples.")
+    print("DataLoaders created with correct 80/20 split.")
+    print(f"  - Train Loader: {len(train_loader.dataset)} samples")
+    print(f"  - Threshold Loader: {len(threshold_loader.dataset)} samples")
     
     return train_loader, threshold_loader
 
