@@ -47,67 +47,68 @@ class SignalDataset(Dataset):
         return self.signals[idx], self.labels[idx], self.snrs[idx]
 
 # --- MAIN DATALOADER PREPARATION FUNCTION ---
-def prepare_dataloaders(batch_size):
+
+def prepare_dataloaders(batch_size, train_ratio=0.8):
     """
     Main function to load all data, combine it, split it, and create DataLoaders.
-    This version correctly handles the 8 SNR levels from your two data files.
+    This version correctly implements the 80/20 train/validation split.
     """
-    print("--- Preparing DataLoaders (with 8 SNR levels) ---")
+    print("--- Preparing DataLoaders with correct 80/20 split ---")
     
-    # Load and process both files
-    data_part1 = load_and_process_single_file(config.DATA_FILE_PATHS['path1']) # e.g., 5dB to 25dB
-    data_part2 = load_and_process_single_file(config.DATA_FILE_PATHS['path2']) # e.g., -10dB to 0dB
+    # 1. Load and process both files
+    data_part1 = load_and_process_single_file(config.DATA_FILE_PATHS['path1'])
+    data_part2 = load_and_process_single_file(config.DATA_FILE_PATHS['path2'])
     
     if data_part1 is None or data_part2 is None:
         raise FileNotFoundError("One or more data files could not be loaded. Please check paths in config.py.")
 
-    # --- CORRECTED SNR and Data Combination Logic ---
-    # Create SNR labels for each file BEFORE combining and shuffling
-    snr_values_part1 = [5, 10, 15, 20, 25]
-    num_samples_per_snr_part1 = data_part1.shape[1] // len(snr_values_part1)
-    snr_labels_part1 = np.repeat(snr_values_part1, num_samples_per_snr_part1)
-
-    snr_values_part2 = [-10, -5, 0]
-    num_samples_per_snr_part2 = data_part2.shape[1] // len(snr_values_part2)
-    snr_labels_part2 = np.repeat(snr_values_part2, num_samples_per_snr_part2)
-
-    # Combine data and SNR labels separately
+    # 2. Combine data from both files
     combined_data = np.concatenate((data_part1, data_part2), axis=1)
-    combined_snrs = np.concatenate((snr_labels_part1, snr_labels_part2))
-
-    # Shuffle the data and SNR labels together to maintain correspondence
+    
+    # 3. Shuffle all the samples (columns) randomly
     p = np.random.permutation(combined_data.shape[1])
     combined_data = combined_data[:, p]
-    combined_snrs = combined_snrs[p]
     
-    # Extract signals and integer labels from the combined data
-    signals_np = combined_data[:config.DATA_LEN, :]
-    labels_int = np.argmax(np.abs(combined_data[config.DATA_LEN:, :]), axis=0).astype(int)
+    # 4. Perform the 80/20 train/validation split on the entire combined dataset
+    num_samples = combined_data.shape[1]
+    split_idx = int(train_ratio * num_samples)
+    
+    train_data_np = combined_data[:, :split_idx]
+    valid_data_np = combined_data[:, split_idx:] # This is the remaining 20%
 
-    signals = torch.from_numpy(signals_np.T).to(torch.complex64)
-    labels = torch.from_numpy(labels_int).to(torch.long)
-    snrs_tensor = torch.from_numpy(combined_snrs).to(torch.long)
+    # 5. Convert to PyTorch Tensors and Transpose
+    train_tensor = torch.from_numpy(train_data_np.T).to(torch.complex64)
+    valid_tensor = torch.from_numpy(valid_data_np.T).to(torch.complex64)
     
-    # Split data based on class labels
-    known_indices = torch.cat([torch.where(labels == i)[0] for i in range(len(config.KNOWN_CLASSES_LIST))])
-    known_unknown_indices = torch.where(labels == len(config.KNOWN_CLASSES_LIST))[0]
-    test_unknown_indices = torch.where(labels == len(config.KNOWN_CLASSES_LIST) + 1)[0]
-    
-    # Create PyTorch Datasets
-    train_dataset = SignalDataset(signals[known_indices], labels[known_indices], snrs_tensor[known_indices])
-    
-    thresh_indices = torch.cat([known_indices, known_unknown_indices])
-    threshold_dataset = SignalDataset(signals[thresh_indices], labels[thresh_indices], snrs_tensor[thresh_indices])
-    
-    test_indices = torch.cat([known_indices, test_unknown_indices])
-    test_dataset = SignalDataset(signals[test_indices], labels[test_indices], snrs_tensor[test_indices])
-    
-    # Create and return all three DataLoaders
+    # 6. Create Datasets and DataLoaders
+    # The training set contains only a mix of known and unknown signals from the 80% split
+    train_signals = train_tensor[:, :config.DATA_LEN]
+    train_labels = torch.argmax(torch.abs(train_tensor[:, config.DATA_LEN:]), dim=1)
+    train_snrs = torch.zeros(len(train_labels)) # Placeholder for SNR if needed later
+    train_dataset = SignalDataset(train_signals, train_labels, train_snrs)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    threshold_loader = DataLoader(threshold_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
-    print("DataLoaders created successfully.")
+    # The validation 20% will be used for both thresholding and final testing
+    valid_signals = valid_tensor[:, :config.DATA_LEN]
+    valid_labels = torch.argmax(torch.abs(valid_tensor[:, config.DATA_LEN:]), dim=1)
+    valid_snrs = torch.zeros(len(valid_labels)) # Placeholder
+    
+    # Create threshold and test sets from the validation split
+    known_mask = valid_labels < len(config.KNOWN_CLASSES_LIST)
+    known_unknown_mask = valid_labels == len(config.KNOWN_CLASSES_LIST) # Zigbee
+    test_unknown_mask = valid_labels == len(config.KNOWN_CLASSES_LIST) + 1 # DSSS
+
+    # Threshold set = Knowns + Zigbee from the validation split
+    thresh_indices = torch.where(known_mask | known_unknown_mask)[0]
+    threshold_dataset = SignalDataset(valid_signals[thresh_indices], valid_labels[thresh_indices], valid_snrs[thresh_indices])
+    threshold_loader = DataLoader(threshold_dataset, batch_size=batch_size, shuffle=False)
+
+    # Test set = Knowns + DSSS from the validation split
+    test_indices = torch.where(known_mask | test_unknown_mask)[0]
+    test_dataset = SignalDataset(valid_signals[test_indices], valid_labels[test_indices], valid_snrs[test_indices])
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    print("DataLoaders created successfully with correct splits:")
     print(f"  - Train Loader: {len(train_loader.dataset)} samples")
     print(f"  - Threshold Loader: {len(threshold_loader.dataset)} samples")
     print(f"  - Test Loader: {len(test_loader.dataset)} samples")
