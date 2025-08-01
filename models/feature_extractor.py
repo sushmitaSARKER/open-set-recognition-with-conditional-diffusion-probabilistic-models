@@ -8,14 +8,14 @@ class DisentangledFeatureExtractor(nn.Module):
     def __init__(self, num_classes=3, feature_dim=16):
         super().__init__()
         self.conv_t1 = ComplexConv1d(1, 8, kernel_size=3, stride=2, padding=1)
-        self.norm_t1 = NaiveComplexLayerNorm([8, 256])
+        self.norm_t1 = NaiveComplexLayerNorm([8, 250])
         self.conv_t2 = ComplexConv1d(8, feature_dim, kernel_size=3, stride=2, padding=1)
-        self.norm_t2 = NaiveComplexLayerNorm([feature_dim, 128])
+        self.norm_t2 = NaiveComplexLayerNorm([feature_dim, 125])
         
         self.conv_f1 = ComplexConv1d(1, 8, kernel_size=3, stride=2, padding=1)
-        self.norm_f1 = NaiveComplexLayerNorm([8, 256])
+        self.norm_f1 = NaiveComplexLayerNorm([8, 250])
         self.conv_f2 = ComplexConv1d(8, feature_dim, kernel_size=3, stride=2, padding=1)
-        self.norm_f2 = NaiveComplexLayerNorm([feature_dim, 128])
+        self.norm_f2 = NaiveComplexLayerNorm([feature_dim, 125])
         
         self.avg_pool = nn.AdaptiveAvgPool1d(1)
         self.classifier_time = ComplexLinear(feature_dim, num_classes)
