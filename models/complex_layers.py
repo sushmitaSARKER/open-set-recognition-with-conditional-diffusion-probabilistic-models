@@ -50,9 +50,9 @@ class DiffusionEmbedding(nn.Module):
         return self.projection(x)
     def _build_embedding(self, max_step, embed_dim):
         steps = torch.arange(max_step).unsqueeze(1)
-        dims = torch.arange(embed_dim // 2).unsqueeze(0)
-        table = steps * torch.exp(-math.log(max_step) * dims / (embed_dim // 2))
-        return torch.complex(torch.cos(table), torch.sin(table))
+        dims = torch.arange(embed_dim).unsqueeze(0)
+        table = steps * torch.exp(-math.log(10000) * dims / (embed_dim))
+        return torch.exp(1j*table)
 
 class PositionEmbedding(nn.Module):
     def __init__(self, max_len, input_dim, hidden_dim):
