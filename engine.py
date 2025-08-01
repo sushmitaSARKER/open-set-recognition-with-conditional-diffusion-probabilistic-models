@@ -1,5 +1,3 @@
-# engine.py
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,18 +24,15 @@ def train_fe_epoch(model, loader, optimizer, loss_fns, device):
     model.train()
     total_loss, total_acc, count = 0, 0, 0
     
-    for signals, labels in tqdm(loader, desc="Training FE Epoch"):
+    for signals, labels, snrs in tqdm(loader, desc="Training FE Epoch"):
         optimizer.zero_grad()
         signals, labels = signals.to(device), labels.to(device)
         
-        # Create time and frequency domain inputs
         x_time = signals
         x_freq = torch.fft.fft(signals)
         
-        # Forward pass
         logits_list, features_list, _ = model(x_time, x_freq)
         
-        # Calculate losses based on Paper 2 methodology
         loss_t = loss_fns['ce'](logits_list[0], labels)
         loss_f = loss_fns['ce'](logits_list[1], labels)
         loss_comb = loss_fns['ce'](logits_list[2], labels)
@@ -72,16 +67,16 @@ def train_diffusion_epoch(diffusion_model, feature_extractor, loader, optimizer,
     feature_extractor.eval() # Feature extractor is frozen
     total_loss = 0
     
-    for signals, _ in tqdm(loader, desc="Training Diffusion Epoch"):
+    for signals, labels, snrs in tqdm(loader, desc="Training Diffusion Epoch"):
         optimizer.zero_grad()
         x_0 = signals.to(device)
         
-        # 1. Get the conditioning vector 'c' from the trained feature extractor
+        # Get the conditioning vector 'c' from the trained feature extractor
         with torch.no_grad():
             x_freq = torch.fft.fft(x_0)
             _, _, c = feature_extractor(x_0, x_freq)
 
-        # 2. Perform one step of diffusion training
+        # Perform one step of diffusion training
         t = torch.randint(0, diffusion_helper.max_step, (x_0.shape[0],), device=device)
         x_0_reshaped = x_0.reshape(x_0.shape[0], params['sample_rate'], params['input_dim'])
         x_t = diffusion_helper.degrade_fn(x_0_reshaped, t)
@@ -113,16 +108,17 @@ def get_reconstruction_scores(loader, feature_extractor, diffusion_model, diffus
     diffusion_model.eval()
     all_scores = []
     all_labels = []
+    all_snrs = []
     
     with torch.no_grad():
-        for signals, labels in tqdm(loader, desc="Calculating Reconstruction Scores"):
-            signals, labels = signals.to(device), labels.to(device)
+        for signals, labels, snrs in tqdm(loader, desc="Calculating Reconstruction Scores"):
+            signals = signals.to(device)
             
             for i in range(signals.shape[0]):
-                signal, label = signals[i], labels[i].item()
+                signal, label, snr = signals[i], labels[i].item(), snrs[i].item()
                 all_labels.append(label)
+                all_snrs.append(snr)
                 
-                # --- This is the core reconstruction logic from classify_signal_openset ---
                 signal_freq = torch.fft.fft(signal)
                 _, _, c = feature_extractor(signal.unsqueeze(0), signal_freq.unsqueeze(0))
                 
@@ -131,7 +127,6 @@ def get_reconstruction_scores(loader, feature_extractor, diffusion_model, diffus
                 x_t = diffusion_helper.degrade_fn(signal_reshaped, t_max)
                 
                 x_s = x_t
-                # The reconstruction loop can be slow. For faster evaluation, you can reduce steps.
                 for s in range(diffusion_helper.max_step - 1, -1, -1):
                     t_tensor = torch.tensor([s], device=device).expand(x_s.shape[0])
                     predicted_x_0 = diffusion_model(x_s, t_tensor, c)
@@ -145,4 +140,4 @@ def get_reconstruction_scores(loader, feature_extractor, diffusion_model, diffus
                 error = F.mse_loss(signal_reshaped.squeeze(0), reconstructed_signal)
                 all_scores.append(error.item())
                 
-    return np.array(all_scores), np.array(all_labels)
+    return np.array(all_scores), np.array(all_labels), np.array(all_snrs)
