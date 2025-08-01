@@ -9,14 +9,13 @@ from tqdm import tqdm
 from sklearn.metrics import roc_curve, f1_score, precision_score, recall_score, accuracy_score, confusion_matrix
 import matplotlib.pyplot as plt
 
-# --- Project-specific imports from our modular structure ---
-# Make sure these files are in the same directory or accessible in your PYTHONPATH
+# --- Project-specific imports ---
 import config
-from data_loader import prepare_dataloaders
+from data_loader import prepare_train_and_threshold_loaders, prepare_test_loader
 from models.feature_extractor import DisentangledFeatureExtractor
 from models.diffusion_model import tfdiff_WiFi
 from utils.diffusion_helper import SignalDiffusion
-from engine import get_reconstruction_scores # We will use this from the engine
+from engine import get_reconstruction_scores 
 
 # ==============================================================================
 # SECTION 1: THRESHOLD CALCULATION LOGIC
@@ -39,7 +38,7 @@ def calculate_optimal_threshold(threshold_loader, feature_extractor, diffusion_m
     print("### PHASE 3: Calculating Optimal Threshold ###")
     print("="*50)
 
-    # 1. Get reconstruction scores for the entire thresholding dataset
+    # Get reconstruction scores for the entire thresholding dataset
     all_scores, all_labels = get_reconstruction_scores(
         loader=threshold_loader,
         feature_extractor=feature_extractor,
@@ -48,10 +47,10 @@ def calculate_optimal_threshold(threshold_loader, feature_extractor, diffusion_m
         params=config.DIFFUSION_PARAMS
     )
     
-    # 2. Create binary labels (1 for known, 0 for unknown)
+    # Create binary labels (1 for known, 0 for unknown)
     true_binary_labels = np.array([1 if label < len(config.KNOWN_CLASSES_LIST) else 0 for label in all_labels])
     
-    # 3. Calculate Youden's Index to find the best threshold
+    # Calculate Youden's Index to find the best threshold
     # NOTE: roc_curve expects scores where higher means more likely to be in the positive class (known=1).
     # Since a LOW reconstruction error means "known", we pass the NEGATIVE error as the score.
     fpr, tpr, thresholds = roc_curve(true_binary_labels, -np.array(all_scores))
@@ -82,8 +81,8 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
     print("### PHASE 4: Running Final Evaluation on Test Set ###")
     print("="*50)
     
-    # 1. Get reconstruction scores for the entire test set
-    all_scores, true_labels = get_reconstruction_scores(
+    # get_reconstruction_scores now returns all_snrs as the third item
+    all_scores, true_labels, all_snrs = get_reconstruction_scores(
         loader=test_loader,
         feature_extractor=feature_extractor,
         diffusion_model=diffusion_model,
@@ -91,12 +90,12 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
         params=config.DIFFUSION_PARAMS
     )
     
-    # 2. Apply threshold to get open-set predictions (known vs. unknown)
+    # Apply threshold to get open-set predictions (known vs. unknown)
     # Prediction is "known" (1) if error is BELOW threshold, "unknown" (0) otherwise.
     open_set_preds_binary = (all_scores < optimal_threshold).astype(int)
     true_open_set_labels_binary = (true_labels < len(config.KNOWN_CLASSES_LIST)).astype(int)
     
-    # 3. For samples predicted as "known", get the specific class prediction
+    #For samples predicted as "known", get the specific class prediction
     final_predictions = np.full_like(true_labels, -1) # Default to -1 for unknown
     
     # Find indices of samples that were classified as "known"
@@ -115,7 +114,7 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
             closed_set_preds = logits[2].argmax(dim=1).cpu().numpy()
             final_predictions[known_indices] = closed_set_preds
             
-    # 4. Calculate and Print Metrics
+    # Calculate and Print Metrics
     # Map true labels to the final format (-1 for all unknown classes)
     true_final_labels = true_labels.copy()
     true_final_labels[true_final_labels >= len(config.KNOWN_CLASSES_LIST)] = -1
@@ -146,9 +145,25 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
     print("Labels:", [config.KNOWN_CLASSES_LIST[i] for i in range(len(config.KNOWN_CLASSES_LIST))] + ['Unknown'])
     print(cm)
     
-    # NOTE: Add your per-SNR analysis here if needed. It would require the DataLoader
-    # to also provide SNR information for each sample, which you can then use to
-    # group the `all_scores` and `true_labels` arrays before calculating metrics.
+    # --- Per-SNR Analysis Loop ---
+    print("\n--- Per-SNR Performance Metrics ---")
+    snr_levels = sorted(np.unique(all_snrs))
+    
+    print(f"{'SNR (dB)':<10}{'Accuracy':<12}{'F1-Score':<12}")
+    print("-" * 34)
+
+    for snr in snr_levels:
+        snr_mask = (all_snrs == snr)
+        if np.sum(snr_mask) == 0: continue # Skip if no samples for this SNR
+            
+        snr_true_labels = true_final_labels[snr_mask]
+        snr_final_preds = final_predictions[snr_mask]
+        
+        snr_accuracy = accuracy_score(snr_true_labels, snr_final_preds)
+        snr_f1 = f1_score(snr_true_labels, snr_final_preds, average='macro', zero_division=0)
+        
+        print(f"{snr:<10}{snr_accuracy:<12.4f}{snr_f1:<12.4f}")
+
 
 # ==============================================================================
 # MAIN EXECUTION BLOCK
