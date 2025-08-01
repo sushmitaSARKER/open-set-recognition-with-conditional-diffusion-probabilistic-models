@@ -1,5 +1,3 @@
-# evaluate.py
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -171,14 +169,14 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
 if __name__ == '__main__':
     # This script assumes that the models have already been trained by train.py
     
-    # 1. Setup environment and data
+    # Setup environment and data
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     # The loaders will contain all the necessary data splits
     _, threshold_loader, test_loader = prepare_dataloaders(config.EVAL_PARAMS['batch_size'])
     
-    # 2. Load the trained models from Phase 1 and Phase 2
+    # Load the trained models from Phase 1 and Phase 2
     print("Loading pre-trained models...")
     if not (os.path.exists(config.PATHS['feature_extractor']) and os.path.exists(config.PATHS['diffusion_model'])):
         print("\nERROR: Trained model files not found!")
@@ -195,7 +193,7 @@ if __name__ == '__main__':
         
         diffusion_helper = SignalDiffusion(config.DIFFUSION_PARAMS)
         
-        # 3. Calculate the optimal threshold using the threshold_loader
+        # Calculate the optimal threshold using the threshold_loader
         optimal_threshold = calculate_optimal_threshold(
             threshold_loader,
             feature_extractor,
@@ -203,7 +201,7 @@ if __name__ == '__main__':
             diffusion_helper
         )
         
-        # 4. Run the final, detailed evaluation on the test_loader
+        # Run the final, detailed evaluation on the test_loader
         run_final_evaluation(
             test_loader,
             optimal_threshold,
