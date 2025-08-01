@@ -1,13 +1,11 @@
-# train.py
-
 import torch
 import torch.nn as nn
 import argparse
 import os
 
-# --- Project-specific imports from our modular structure ---
+# --- Project-specific imports ---
 import config
-from data_loader import prepare_dataloaders
+from data_loader import prepare_train_and_threshold_loaders
 from models.feature_extractor import DisentangledFeatureExtractor
 from models.diffusion_model import tfdiff_WiFi
 from utils.loss_functions import CosineSimilarityLoss
@@ -25,15 +23,15 @@ def run_phase1_training():
     print("### STARTING PHASE 1: Training the Disentangled Feature Extractor ###")
     print("="*50)
     
-    # 1. Setup environment and data
+    # Setup environment and data
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     # We only need the training loader for this phase.
     # The dataloader will automatically be configured to only use the KNOWN classes.
-    train_loader, _, _ = prepare_dataloaders(config.TRAINING_PARAMS['batch_size'])
+     train_loader, _ = prepare_train_and_threshold_loaders(config.TRAINING_PARAMS['batch_size'])
     
-    # 2. Instantiate model, losses, and optimizer
+    # Instantiate model, losses, and optimizer
     model = DisentangledFeatureExtractor(
         num_classes=config.FEATURE_EXTRACTOR_PARAMS['num_classes'],
         feature_dim=config.FEATURE_EXTRACTOR_PARAMS['feature_dim']
@@ -45,7 +43,7 @@ def run_phase1_training():
     }
     optimizer = torch.optim.Adam(model.parameters(), lr=config.TRAINING_PARAMS['lr_fe'])
     
-    # 3. Main Training Loop
+    # Main Training Loop
     for epoch in range(config.TRAINING_PARAMS['phase1_epochs']):
         # The core logic for one epoch is handled by the engine
         avg_loss, avg_acc = engine.train_fe_epoch(model, train_loader, optimizer, loss_fns, device)
@@ -67,13 +65,13 @@ def run_phase2_training():
     print("### STARTING PHASE 2: Training the Conditional RF-Diffusion Model ###")
     print("="*50)
     
-    # 1. Setup environment and data
+    # Setup environment and data
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    train_loader, _, _ = prepare_dataloaders(config.TRAINING_PARAMS['batch_size'])
+    train_loader, _ = prepare_train_and_threshold_loaders(config.TRAINING_PARAMS['batch_size'])
     
-    # 2. Load the pre-trained feature extractor from Phase 1
+    # Load the pre-trained feature extractor from Phase 1
     print(f"Loading pre-trained feature extractor from '{config.PATHS['feature_extractor']}'...")
     if not os.path.exists(config.PATHS['feature_extractor']):
         print("\nERROR: Feature extractor model not found!")
@@ -94,7 +92,7 @@ def run_phase2_training():
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.Adam(diffusion_model.parameters(), lr=config.TRAINING_PARAMS['lr_diff'])
     
-    # 4. Main Training Loop
+    # Main Training Loop
     for epoch in range(config.TRAINING_PARAMS['phase2_epochs']):
         avg_loss = engine.train_diffusion_epoch(
             diffusion_model=diffusion_model,
@@ -115,19 +113,12 @@ def run_phase2_training():
 # ==============================================================================
 # MAIN EXECUTION BLOCK
 # ==============================================================================
-if __name__ == '__main__':
-    # This block allows you to run specific phases from the command line.
-    # Example usage:
-    #   python train.py            (runs both Phase 1 and Phase 2)
-    #   python train.py --phase 1  (runs only Phase 1)
-    #   python train.py --phase 2  (runs only Phase 2)
-    
+if __name__ == '__main__':    
     parser = argparse.ArgumentParser(description="Train models for RF Open-Set Recognition.")
     parser.add_argument('--phase', type=int, choices=[1, 2], help="Which training phase to run (1 for Feature Extractor, 2 for Diffusion Model). Runs both if not specified.")
     args = parser.parse_args()
 
     if args.phase is None:
-        # If no specific phase is chosen, run the full pipeline
         run_phase1_training()
         run_phase2_training()
     elif args.phase == 1:
