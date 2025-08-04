@@ -37,7 +37,7 @@ def calculate_optimal_threshold(threshold_loader, feature_extractor, diffusion_m
     print("="*50)
 
     # Get reconstruction scores for the entire thresholding dataset
-    all_scores, all_labels = get_reconstruction_scores(
+    all_scores, all_labels, all_snrs = get_reconstruction_scores(
         loader=threshold_loader,
         feature_extractor=feature_extractor,
         diffusion_model=diffusion_model,
@@ -174,7 +174,8 @@ if __name__ == '__main__':
     print(f"Using device: {device}")
     
     # The loaders will contain all the necessary data splits
-    _, threshold_loader, test_loader = prepare_dataloaders(config.EVAL_PARAMS['batch_size'])
+    _, threshold_loader = prepare_train_and_threshold_loaders(config.EVAL_PARAMS['batch_size'])
+    test_loader = prepare_test_loader(config.EVAL_PARAMS['batch_size'])
     
     # Load the trained models from Phase 1 and Phase 2
     print("Loading pre-trained models...")
@@ -209,3 +210,4 @@ if __name__ == '__main__':
             diffusion_model,
             diffusion_helper
         )
+
