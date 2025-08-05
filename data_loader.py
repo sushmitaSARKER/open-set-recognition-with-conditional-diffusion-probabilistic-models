@@ -7,27 +7,31 @@ import config
 
 # --- HELPER FUNCTION TO PROCESS A SINGLE .MAT FILE ---
 def load_and_process_single_file(file_path):
-    """Loads and normalizes data from a single .mat file."""
+    """Loads, normalizes, and prepares data from a single .mat file."""
     print(f"  -> Processing file: {file_path}")
     if not os.path.exists(file_path):
         print(f"    ERROR: File not found at {file_path}. Please check the path in config.py.")
         return None
         
     try:
+        # Use scipy.io.loadmat for better compatibility with different .mat versions
         data_dict = loadmat(file_path)
         data = data_dict['vect']
     except Exception as e:
         print(f"    ERROR: Could not read file {file_path}. Details: {e}")
         return None
 
-    signals = data[:config.DATA_LEN, :]
-    labels = data[config.DATA_LEN:, :] 
+    signals = data[:500, :]
+    labels = data[500:, :] 
 
+    # Normalize signals
     mean = np.mean(signals, axis=0)
+    # Use a small epsilon to avoid division by zero in case of flat signals
     std = (np.max(signals, axis=0) - np.min(signals, axis=0)) + 1e-8
     
     signals_normalized = (signals - mean) / std
     
+    # Combine normalized signals with their original labels
     processed_data = np.concatenate((signals_normalized, labels), axis=0)
     return processed_data
 
@@ -46,44 +50,63 @@ class SignalDataset(Dataset):
         # Return all three items for each sample
         return self.signals[idx], self.labels[idx], self.snrs[idx]
 
-# --- MAIN DATALOADER PREPARATION FUNCTION ---
-
+# --- MAIN DATALOADER PREPARATION FUNCTIONS ---
 def prepare_train_and_threshold_loaders(batch_size, train_ratio=0.8):
     """
     Prepares loaders for training (80%) and thresholding (20% + unknowns).
     """
     print("--- Preparing Train and Threshold DataLoaders with 80/20 Split ---")
     
-    # 1. Load and process the two main data files
+    # Load and process the two main data files
     data_part1 = load_and_process_single_file(config.DATA_FILE_PATHS['path1'])
     data_part2 = load_and_process_single_file(config.DATA_FILE_PATHS['path2'])
     
     if data_part1 is None or data_part2 is None:
         raise FileNotFoundError("Main data files could not be loaded. Please check paths in config.py.")
 
+    # Create SNR labels for each file BEFORE combining
+    snr_values_part1 = [5, 10, 15, 20, 25]
+    num_samples_per_snr_part1 = data_part1.shape[1] // len(snr_values_part1)
+    snr_labels_part1 = np.repeat(snr_values_part1, num_samples_per_snr_part1)
+
+    snr_values_part2 = [-10, -5, 0]
+    num_samples_per_snr_part2 = data_part2.shape[1] // len(snr_values_part2)
+    snr_labels_part2 = np.repeat(snr_values_part2, num_samples_per_snr_part2)
+
+    # Combine data and SNR labels separately
     combined_data = np.concatenate((data_part1, data_part2), axis=1)
+    combined_snrs = np.concatenate((snr_labels_part1, snr_labels_part2))
+
+    # --- DEBUGGING LOGIC ---
+    if config.DEBUG_MODE:
+        print(f"!!! DEBUG MODE ON: Using a subset of {config.DEBUG_SUBSET_SIZE} samples for training/thresholding. !!!")
+        p = np.random.permutation(combined_data.shape[1])
+        subset_indices = p[:config.DEBUG_SUBSET_SIZE]
+        combined_data = combined_data[:, subset_indices]
+        combined_snrs = combined_snrs[subset_indices]
+    # -------------------------
+    
+    # Extract signals and integer labels from the (potentially subsetted) data
     signals_np = combined_data[:config.DATA_LEN, :]
     labels_int = np.argmax(np.abs(combined_data[config.DATA_LEN:, :]), axis=0).astype(int)
     
     signals = torch.from_numpy(signals_np.T).to(torch.complex64)
     labels = torch.from_numpy(labels_int).to(torch.long)
-    snrs_tensor = torch.zeros(len(labels), dtype=torch.long) # Placeholder for SNRs
-
-    # 2. Get indices for all known and known-unknown classes
+    snrs_tensor = torch.from_numpy(combined_snrs).to(torch.long)
+    
+    # Split data based on class labels
     known_indices_all = torch.cat([torch.where(labels == i)[0] for i in range(len(config.KNOWN_CLASSES_LIST))])
     known_unknown_indices = torch.where(labels == len(config.KNOWN_CLASSES_LIST))[0]
     
-    # 3. Perform the 80/20 split ON THE KNOWN CLASSES ONLY
     shuffled_indices = known_indices_all[torch.randperm(len(known_indices_all))]
     split_idx = int(train_ratio * len(shuffled_indices))
     train_indices = shuffled_indices[:split_idx]
     valid_known_indices = shuffled_indices[split_idx:]
     
-    # 4. Create the train_loader using the 80% split
+    #  Create Datasets and DataLoaders
     train_dataset = SignalDataset(signals[train_indices], labels[train_indices], snrs_tensor[train_indices])
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-    # 5. Create the threshold_loader using the 20% validation split of knowns + all "known unknowns"
     thresh_indices = torch.cat([valid_known_indices, known_unknown_indices])
     threshold_dataset = SignalDataset(signals[thresh_indices], labels[thresh_indices], snrs_tensor[thresh_indices])
     threshold_loader = DataLoader(threshold_dataset, batch_size=batch_size, shuffle=False)
@@ -100,14 +123,19 @@ def prepare_test_loader(batch_size):
     """
     print("\n--- Preparing Final Test DataLoader ---")
     
-    # Load and process the separate known and unknown test files
     known_test_data = load_and_process_single_file(config.TEST_DATA_FILE_PATHS['known'])
     unknown_test_data = load_and_process_single_file(config.TEST_DATA_FILE_PATHS['unknown'])
     
     if known_test_data is None or unknown_test_data is None:
         raise FileNotFoundError("Test data files could not be loaded. Please check paths in config.py.")
+
+    # --- DEBUGGING LOGIC ---
+    if config.DEBUG_MODE:
+        print(f"!!! DEBUG MODE ON: Using a subset of test samples. !!!")
+        known_test_data = known_test_data[:, :config.DEBUG_SUBSET_SIZE // 2]
+        unknown_test_data = unknown_test_data[:, :config.DEBUG_SUBSET_SIZE // 2]
+    # -------------------------
         
-    # Combine the known test and unknown test data
     test_data_combined = np.concatenate((known_test_data, unknown_test_data), axis=1)
     
     signals_np = test_data_combined[:config.DATA_LEN, :]
@@ -115,7 +143,7 @@ def prepare_test_loader(batch_size):
     
     signals = torch.from_numpy(signals_np.T).to(torch.complex64)
     labels = torch.from_numpy(labels_int).to(torch.long)
-    snrs_tensor = torch.zeros(len(labels), dtype=torch.long) # Placeholder for SNRs
+    snrs_tensor = torch.zeros(len(labels), dtype=torch.long) # Placeholder for SNRs in test set
     
     test_dataset = SignalDataset(signals, labels, snrs_tensor)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
