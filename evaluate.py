@@ -44,6 +44,17 @@ def calculate_optimal_threshold(threshold_loader, feature_extractor, diffusion_m
         diffusion_helper=diffusion_helper,
         params=config.DIFFUSION_PARAMS
     )
+    # --- DIAGNOSTIC BLOCK ---
+    print("\n--- Sanity Checking Scores and Labels ---")
+    print(f"Number of scores calculated: {len(all_scores)}")
+    print(f"Number of NaN scores: {np.isnan(all_scores).sum()}")
+    print(f"Number of Inf scores: {np.isinf(all_scores).sum()}")
+    print(f"A few example scores: {all_scores[:10]}")
+    
+    unique_labels, counts = np.unique(all_labels, return_counts=True)
+    print(f"Labels in threshold set: {dict(zip(unique_labels, counts))}")
+    print("-------------------------------------\n")
+    # ------------------------------------
     
     # Create binary labels (1 for known, 0 for unknown)
     true_binary_labels = np.array([1 if label < len(config.KNOWN_CLASSES_LIST) else 0 for label in all_labels])
@@ -210,4 +221,5 @@ if __name__ == '__main__':
             diffusion_model,
             diffusion_helper
         )
+
 
