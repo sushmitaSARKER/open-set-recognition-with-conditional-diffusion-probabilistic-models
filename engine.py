@@ -183,4 +183,79 @@ def get_reconstruction_scores(loader, feature_extractor, diffusion_model, diffus
     return np.array(all_scores), np.array(all_labels), np.array(all_snrs)
 
 
+# ==============================================================================
+# --------------------UTILITY FUNCTIONS ------------------
+# ==============================================================================
+
+def validate_model(model, loader, loss_fns, device):
+    """
+    Validation function for feature extractor.
+    """
+    model.eval()
+    total_loss, total_acc, count = 0, 0, 0
+    
+    with torch.no_grad():
+        for signals, labels, snrs in tqdm(loader, desc="Validation"):
+            signals, labels = signals.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+            
+            x_time = signals
+            x_freq = torch.fft.fft(signals)
+            logits_list, features_list, _ = model(x_time, x_freq)
+            
+            loss_t = loss_fns['ce'](logits_list[0], labels)
+            loss_f = loss_fns['ce'](logits_list[1], labels)
+            loss_comb = loss_fns['ce'](logits_list[2], labels)
+            loss_cos = loss_fns['cos'](features_list[0], features_list[1])
+            
+            loss = loss_t + loss_f + loss_comb + 0.5 * torch.abs(loss_cos)
+            
+            total_loss += loss.item()
+            total_acc += (logits_list[2].argmax(dim=1) == labels).sum().item()
+            count += len(labels)
+    
+    avg_loss = total_loss / len(loader)
+    avg_acc = total_acc / count
+    
+    return avg_loss, avg_acc
+
+def save_checkpoint(model, optimizer, epoch, loss, filepath):
+    """
+    Save model checkpoint.
+    """
+    torch.save({
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss,
+    }, filepath)
+    print(f"Checkpoint saved: {filepath}")
+
+def load_checkpoint(model, optimizer, filepath):
+    """
+    Load model checkpoint.
+    """
+    checkpoint = torch.load(filepath)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    epoch = checkpoint['epoch']
+    loss = checkpoint['loss']
+    print(f"Checkpoint loaded: {filepath} (Epoch: {epoch}, Loss: {loss:.4f})")
+    return model, optimizer, epoch, loss
+
+def calculate_model_size(model):
+    """
+    Calculate and print model size information.
+    """
+    param_count = sum(p.numel() for p in model.parameters())
+    trainable_param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    print(f"Total parameters: {param_count:,}")
+    print(f"Trainable parameters: {trainable_param_count:,}")
+    print(f"Model size: {param_count * 4 / 1024 / 1024:.2f} MB (assuming 4 bytes per parameter)")
+    
+    return param_count, trainable_param_count
+
+
+
+
 
