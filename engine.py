@@ -99,45 +99,53 @@ def train_diffusion_epoch(diffusion_model, feature_extractor, loader, optimizer,
 def get_reconstruction_scores(loader, feature_extractor, diffusion_model, diffusion_helper, params):
     """
     Calculates reconstruction error (anomaly score) for all samples in a dataloader.
-    
-    Returns:
-        tuple: A numpy array of scores and a numpy array of corresponding labels.
+    Optimized for batch processing and memory efficiency.
     """
     device = next(diffusion_model.parameters()).device
     feature_extractor.eval()
     diffusion_model.eval()
+    
     all_scores = []
     all_labels = []
     all_snrs = []
     
     with torch.no_grad():
         for signals, labels, snrs in tqdm(loader, desc="Calculating Reconstruction Scores"):
+            batch_size = signals.shape[0]
             signals = signals.to(device)
             
-            for i in range(signals.shape[0]):
-                signal, label, snr = signals[i], labels[i].item(), snrs[i].item()
-                all_labels.append(label)
-                all_snrs.append(snr)
+            # Process entire batch at once for feature extraction
+            signals_freq = torch.fft.fft(signals)
+            _, _, c = feature_extractor(signals, signals_freq)
+            
+            # Reshape signals for diffusion processing
+            signals_reshaped = signals.reshape(batch_size, params['sample_rate'], params['input_dim'])
+            
+            # Batch denoising process
+            t_max = torch.full((batch_size,), diffusion_helper.max_step - 1, device=device)
+            x_t = diffusion_helper.degrade_fn(signals_reshaped, t_max)
+            x_s = x_t
+            
+            # Reverse diffusion process (batch-wise)
+            for s in range(diffusion_helper.max_step - 1, -1, -1):
+                t_tensor = torch.full((batch_size,), s, device=device)
+                predicted_x_0 = diffusion_model(x_s, t_tensor, c)
                 
-                signal_freq = torch.fft.fft(signal)
-                _, _, c = feature_extractor(signal.unsqueeze(0), signal_freq.unsqueeze(0))
-                
-                signal_reshaped = signal.reshape(1, params['sample_rate'], params['input_dim'])
-                t_max = torch.tensor([diffusion_helper.max_step - 1], device=device)
-                x_t = diffusion_helper.degrade_fn(signal_reshaped, t_max)
-                
-                x_s = x_t
-                for s in range(diffusion_helper.max_step - 1, -1, -1):
-                    t_tensor = torch.tensor([s], device=device).expand(x_s.shape[0])
-                    predicted_x_0 = diffusion_model(x_s, t_tensor, c)
-                    if s > 0:
-                        t_prev = torch.tensor([s - 1], device=device)
-                        x_s = diffusion_helper.degrade_fn(predicted_x_0, t_prev)
-                    else:
-                        x_s = predicted_x_0
-                
-                reconstructed_signal = x_s.squeeze(0)
-                error = F.mse_loss(signal_reshaped.squeeze(0), reconstructed_signal)
-                all_scores.append(error.item())
-                
+                if s > 0:
+                    t_prev = torch.full((batch_size,), s - 1, device=device)
+                    x_s = diffusion_helper.degrade_fn(predicted_x_0, t_prev)
+                else:
+                    x_s = predicted_x_0
+            
+            # Calculate reconstruction errors for the batch
+            errors = F.mse_loss(signals_reshaped, x_s, reduction='none')
+            errors = errors.view(batch_size, -1).mean(dim=1)  # Average over signal dimensions
+            
+            # Store results
+            all_scores.extend(errors.cpu().numpy())
+            all_labels.extend(labels.numpy())
+            all_snrs.extend(snrs.numpy())
+    
     return np.array(all_scores), np.array(all_labels), np.array(all_snrs)
+
+
