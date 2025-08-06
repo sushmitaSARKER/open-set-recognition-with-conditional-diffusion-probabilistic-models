@@ -49,6 +49,9 @@ def run_phase1_training():
         avg_loss, avg_acc = engine.train_fe_epoch(model, train_loader, optimizer, loss_fns, device)
         
         print(f"Epoch {epoch+1}/{config.TRAINING_PARAMS['phase1_epochs']} -> Avg Loss: {avg_loss:.4f}, Avg Acc: {avg_acc:.4f}")
+        # Save checkpoint every few epochs
+        if (epoch + 1) % 5 == 0:
+            engine.save_checkpoint(model, optimizer, epoch, avg_loss, f"checkpoint_fe_epoch_{epoch+1}.pt")
         
     # 4. Save the final trained model
     torch.save(model.state_dict(), config.PATHS['feature_extractor'])
@@ -125,3 +128,4 @@ if __name__ == '__main__':
         run_phase1_training()
     elif args.phase == 2:
         run_phase2_training()
+
