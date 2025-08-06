@@ -13,7 +13,7 @@ from data_loader import prepare_train_and_threshold_loaders, prepare_test_loader
 from models.feature_extractor import DisentangledFeatureExtractor
 from models.diffusion_model import tfdiff_WiFi
 from utils.diffusion_helper import SignalDiffusion
-from engine import get_reconstruction_scores
+from engine import get_reconstruction_scores, calculate_model_size
 
 # ==============================================================================
 # SECTION 1: THRESHOLD CALCULATION LOGIC
@@ -206,8 +206,16 @@ if __name__ == '__main__':
         ).to(device)
         feature_extractor.load_state_dict(torch.load(config.PATHS['feature_extractor'], map_location=device))
         
+        # Model size analysis
+        print("\n--- Loaded Feature Extractor Info ---")
+        calculate_model_size(feature_extractor)
+        
         diffusion_model = tfdiff_WiFi(config.DIFFUSION_PARAMS).to(device)
         diffusion_model.load_state_dict(torch.load(config.PATHS['diffusion_model'], map_location=device))
+        
+        print("\n--- Loaded Diffusion Model Info ---")
+        calculate_model_size(diffusion_model)
+        print("----------------------------------\n")
         
         diffusion_helper = SignalDiffusion(config.DIFFUSION_PARAMS)
         
@@ -227,3 +235,58 @@ if __name__ == '__main__':
             diffusion_model,
             diffusion_helper
         )
+
+from evaluate import run_final_evaluation
+import numpy as np
+
+if DO_PHASE_4_EVALUATION:
+    if optimal_threshold is None:
+        try:
+            optimal_threshold = np.loadtxt("optimal_threshold.txt")
+            print(f"Loaded optimal threshold from file: {optimal_threshold}")
+        except IOError:
+            optimal_threshold = 0.05  # Use a better fallback than 0.2
+            print(f"WARNING: optimal_threshold.txt not found. Using default value: {optimal_threshold}")
+    
+    print(f"Starting Phase 4 evaluation with threshold: {optimal_threshold}")
+    
+    # MISSING PART: Load models if not already loaded
+    if 'feature_extractor' not in locals() or 'diffusion_model' not in locals():
+        print("Loading models for evaluation...")
+        
+        feature_extractor = DisentangledFeatureExtractor(
+            num_classes=config.FEATURE_EXTRACTOR_PARAMS['num_classes'],
+            feature_dim=config.FEATURE_EXTRACTOR_PARAMS['feature_dim']
+        ).to(device)
+        feature_extractor.load_state_dict(torch.load(config.PATHS['feature_extractor'], map_location=device))
+        
+        diffusion_model = tfdiff_WiFi(config.DIFFUSION_PARAMS).to(device)
+        diffusion_model.load_state_dict(torch.load(config.PATHS['diffusion_model'], map_location=device))
+        
+        diffusion_helper = SignalDiffusion(config.DIFFUSION_PARAMS)
+    
+    # MISSING PART: Load test data if not already loaded
+    if 'test_loader' not in locals():
+        print("Loading test data...")
+        test_loader = prepare_test_loader(config.EVAL_PARAMS['batch_size'])
+    
+    # THIS IS THE CRITICAL MISSING PART - Actually call the function!
+    print("Running final evaluation...")
+    try:
+        run_final_evaluation(
+            test_loader,
+            optimal_threshold,
+            feature_extractor,
+            diffusion_model,
+            diffusion_helper
+        )
+        print("✅ Final evaluation completed successfully!")
+    except Exception as e:
+        print(f"❌ Error during final evaluation: {e}")
+        import traceback
+        traceback.print_exc()
+        
+else:
+    print("Phase 4 evaluation is disabled (DO_PHASE_4_EVALUATION = False)")
+
+
