@@ -21,9 +21,8 @@ def load_and_process_single_file(file_path):
         print(f"    ERROR: Could not read file {file_path}. Details: {e}")
         return None
 
-    # FIXED: Use config.DATA_LEN consistently
-    signals = data[:config.DATA_LEN, :]  # Use 512, not hardcoded 500
-    labels = data[config.DATA_LEN:, :]   # Start labels after DATA_LEN
+    signals = data[:config.DATA_LEN, :]  
+    labels = data[config.DATA_LEN:, :]   
 
     # Normalize signals
     mean = np.mean(signals, axis=0)
@@ -50,6 +49,22 @@ class SignalDataset(Dataset):
     def __getitem__(self, idx):
         # Return all three items for each sample
         return self.signals[idx], self.labels[idx], self.snrs[idx]
+#---------ZIGBEE DATA LOADER FOR THRESHOLD CALCULATION----------
+def prepare_zigbee_threshold_data():    
+    """Load Zigbee data specifically for threshold calculation"""    
+    zigbee_file = './signal_mat_data/zigbee_DSSS_mixeddata_withlabels_5dBto25dB_order.mat'    
+    zigbee_data = load_and_process_single_file(zigbee_file)    
+    if zigbee_data is None:
+        print("WARNING: Could not load Zigbee data for threshold calculation")
+        return None, None, None
+    # Extract only Zigbee samples (first part of the zigbee file)    
+    zigbee_signals = zigbee_data[:500, :3200]  # First 3200 samples are Zigbee    
+    zigbee_labels = np.full(3200, 3)  # Label them as class 3    
+    zigbee_snrs = np.zeros(3200)    
+ 
+    print(f"Loaded {zigbee_signals.shape[1]} Zigbee samples for Threshold Calculation")
+ 
+    return zigbee_signals, zigbee_labels, zigbee_snrs
 
 # --- MAIN DATALOADER PREPARATION FUNCTIONS ---
 def prepare_train_and_threshold_loaders(batch_size, train_ratio=0.8):
@@ -103,14 +118,37 @@ def prepare_train_and_threshold_loaders(batch_size, train_ratio=0.8):
     signals = torch.from_numpy(signals_np.T).to(torch.complex64)
     labels = torch.from_numpy(labels_int).to(torch.long)
     snrs_tensor = torch.from_numpy(combined_snrs).to(torch.long)
+
+    #ADD ZIGBEE DATA FOR THRESHOLDING    
+    zigbee_signals, zigbee_labels, zigbee_snrs = prepare_zigbee_threshold_data()    
+    if zigbee_signals is not None:        
+        print("Adding real Zigbee data for threshold calculation...")        
+        # Convert Zigbee data to tensors        
+        zigbee_signals_tensor = torch.from_numpy(zigbee_signals.T).to(torch.complex64)        
+        zigbee_labels_tensor = torch.from_numpy(zigbee_labels).to(torch.long)        
+        zigbee_snrs_tensor = torch.from_numpy(zigbee_snrs).to(torch.long)   
+        # Append Zigbee data to your existing data        
+        signals = torch.cat([signals, zigbee_signals_tensor])        
+        labels = torch.cat([labels, zigbee_labels_tensor])        
+        snrs_tensor = torch.cat([snrs_tensor, zigbee_snrs_tensor])  
+        print(f"Total samples after adding Zigbee: {len(signals)}") 
+    else:       
+        print("⚠️  WARNING: No Zigbee data loaded. Will use synthetic unknown data as fallback.")
     
     # 6. Get indices for all known and "known unknown" classes
     known_indices_all = torch.cat([torch.where(labels == i)[0] for i in range(len(config.KNOWN_CLASSES_LIST))])
     known_unknown_indices = torch.where(labels == len(config.KNOWN_CLASSES_LIST))[0] # e.g., Zigbee
     
-    # ADD MORE DEBUGGING:
-    print(f"Known class samples: {len(known_indices_all)}")
-    print(f"Known-unknown class samples: {len(known_unknown_indices)}")
+    # ADD DEBUGGING TO VERIFY DATA:    
+    print(f"=== DATA DEBUGGING ===")    
+    unique_labels, counts = torch.unique(labels, return_counts=True)    
+    labels_dict = dict(zip(unique_labels.numpy(), counts.numpy()))    
+    print(f"Unique labels found: {labels_dict}")    
+    print(f"Expected known classes (0-{len(config.KNOWN_CLASSES_LIST)-1}): {list(range(len(config.KNOWN_CLASSES_LIST)))}")    
+    print(f"Expected known-unknown class: {len(config.KNOWN_CLASSES_LIST)}")    
+    print(f"Known class samples: {len(known_indices_all)}")    
+    print(f"Known-unknown class samples: {len(known_unknown_indices)}")    
+    print(f"======================")
     
     # HANDLE MISSING UNKNOWN CLASS:
     if len(known_unknown_indices) == 0:
@@ -192,3 +230,4 @@ def prepare_test_loader(batch_size):
     print(f"  - Test Loader created with {len(test_loader.dataset)} samples.")
     
     return test_loader
+
