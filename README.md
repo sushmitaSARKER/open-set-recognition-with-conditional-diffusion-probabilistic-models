@@ -11,10 +11,7 @@ The project is structured into a three-phase workflow:
 
 ## File Structure
 
-The repository is organized as follows:
-
-.├── models/│   ├── init.py│   ├── feature_extractor.py  # Defines the DisentangledFeatureExtractor model│   ├── diffusion_model.py    # Defines the tfdiff_WiFi (diffusion transformer) model│   └── complex_layers.py     # Contains custom complex-valued PyTorch layers├── utils/│   ├── init.py│   ├── diffusion_helper.py   # Implements the diffusion forward process│   └── loss_functions.py     # Defines the CosineSimilarityLoss├── data/│   └── ... (Your .mat dataset files should go here)├── saved_models/│   └── ... (Trained models will be saved here)├── config.py                 # Main configuration file for paths, and model parameters├── data_loader.py            # Handles loading and preprocessing of the .mat dataset files├── train.py                  # Main script for running the training phases├── engine.py                 # Contains the core training and evaluation loops└── evaluate.py               # Script for running the final OSR evaluation
----
+The repository organization flow is explained in the pipeline file
 
 ## Prerequisites
 
