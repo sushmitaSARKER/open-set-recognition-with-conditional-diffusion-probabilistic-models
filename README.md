@@ -90,9 +90,12 @@ Training: The model is trained to minimize the Mean Squared Error (MSE) between 
 
 ### Phase 3: Open-Set Recognition
 Anomaly Score: The reconstruction error (MSE) from the diffusion model is used as an anomaly score. The intuition is that the model will produce low error for known signals it was trained on and high error for unknown signals.
+
 Thresholding: An optimal threshold is calculated from a validation set to create a decision boundary.
 Classification:
+
 If error < threshold, the signal is "known" and is passed to the feature extractor for specific class identification.
+
 If error >= threshold, the signal is "unknown".
 
 
