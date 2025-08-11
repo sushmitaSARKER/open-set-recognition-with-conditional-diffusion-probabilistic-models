@@ -76,8 +76,11 @@ python evaluate.py
 ## Methodology Overview
 ### Phase 1: Disentangled Feature Extractor
 Goal: To learn a mapping from a raw RF signal to a robust, low-dimensional feature vector c.
+
 Architecture: A two-branch CNN that processes the time and frequency domains of the signal in parallel using complex-valued layers.
+
 Loss Function: A composite loss that combines Cross-Entropy (for classification accuracy) and Cosine Similarity (to encourage disentanglement between the time and frequency features).
+
 ### Phase 2: Conditional Diffusion Model
 Goal: To train a generative model capable of reconstructing signals from the known classes, conditioned on the feature vector c.
 Architecture: tfdiff_WiFi, a Hierarchical Diffusion Transformer that uses attention mechanisms and complex-valued layers. It takes a noisy signal, a timestep t, and the condition c as input and predicts the original, clean signal.
