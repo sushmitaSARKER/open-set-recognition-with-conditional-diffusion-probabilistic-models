@@ -83,8 +83,11 @@ Loss Function: A composite loss that combines Cross-Entropy (for classification 
 
 ### Phase 2: Conditional Diffusion Model
 Goal: To train a generative model capable of reconstructing signals from the known classes, conditioned on the feature vector c.
+
 Architecture: tfdiff_WiFi, a Hierarchical Diffusion Transformer that uses attention mechanisms and complex-valued layers. It takes a noisy signal, a timestep t, and the condition c as input and predicts the original, clean signal.
+
 Training: The model is trained to minimize the Mean Squared Error (MSE) between its reconstruction and the original signal.
+
 ### Phase 3: Open-Set Recognition
 Anomaly Score: The reconstruction error (MSE) from the diffusion model is used as an anomaly score. The intuition is that the model will produce low error for known signals it was trained on and high error for unknown signals.
 Thresholding: An optimal threshold is calculated from a validation set to create a decision boundary.
