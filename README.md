@@ -1,7 +1,5 @@
 # open-set-recognition-with-conditional-diffusion-probabilistic-models
 
-# RF Signal Open-Set Recognition via Conditional Diffusion
-
 This repository contains the PyTorch implementation of a model for open-set recognition (OSR) of radio frequency (RF) signals. The methodology is based on the principles outlined in the paper **"RF-Diffusion: Radio Signal Generation via Time-Frequency Diffusion"**. The core idea is to train a conditional diffusion model to reconstruct signals from known classes. The reconstruction error is then used as an anomaly score to distinguish between known and unknown signals.
 
 The project is structured into a three-phase workflow:
