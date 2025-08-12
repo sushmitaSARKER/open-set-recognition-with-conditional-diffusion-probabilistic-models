@@ -78,7 +78,7 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
     print("### PHASE 4: Running Final Evaluation on Test Set ###")
     print("="*50)
 
-    # Call the updated get_reconstruction_scores which no longer returns SNRs
+    # This function call assumes get_reconstruction_scores returns scores and labels
     all_scores, true_labels = get_reconstruction_scores(
         loader=test_loader,
         feature_extractor=feature_extractor,
@@ -90,20 +90,23 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
     # Apply threshold to get open-set predictions (known vs. unknown)
     unique, counts = np.unique(true_labels, return_counts=True)
     print(f"Test labels distribution: {dict(zip(unique, counts))}")
+    print("Class map: 0=LTE, 1=BT LE, 2=WLAN, 3=Zigbee, 4=DSSS")
 
-    # Open-set decision: 1=known if error < threshold, else 0=unknown
+    # Open-set decision: 1=known if error<thr, else 0=unknown
     open_known_pred = (all_scores < optimal_threshold).astype(int)
 
     # Default all predictions to -1 (unknown)
     final_preds = np.full_like(true_labels, -1)
 
-    # Find indices of samples that were classified as "known"
+    # --- START OF CORRECTION ---
+
+    # FIX 1: Get the array of indices from the tuple returned by np.where by adding [0]
     known_idx = np.where(open_known_pred == 1)[0]
-    
+
     if known_idx.size > 0:
-        print(f"{known_idx.size}/{len(true_labels)} predicted as known -> classifying into known classes...")
+        print(f"{known_idx.size}/{len(true_labels)} predicted as known -> classifying into 0/1/2...")
         
-        # Select only the signal tensor (element 0) from the tuple returned by the dataset
+        # FIX 2: Select only the signal tensor (the 0th element) from the dataset's returned tuple
         signals_to_classify = torch.stack([test_loader.dataset[i][0] for i in known_idx])
         
         with torch.no_grad():
@@ -111,51 +114,89 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
             x_time = signals_to_classify.to(device)
             x_freq = torch.fft.fft(x_time)
             
+            # Assuming the feature extractor returns a list/tuple of logits, and the combined one is at index 2
             logits, _, _ = feature_extractor(x_time, x_freq)
-            closed_set_preds = logits[2].argmax(dim=1).cpu().numpy()
+            cls = logits[2].argmax(dim=1).cpu().numpy()
             
-            final_preds[known_idx] = closed_set_preds
+            final_preds[known_idx] = cls
             
     else:
         print("No samples predicted as known by threshold.")
 
-    # Map true labels to the final format (-1 for all unknown classes)
-    true_final_labels = true_labels.copy()
-    num_known_classes = len(config.KNOWN_CLASSES_LIST)
-    true_final_labels[true_labels >= num_known_classes] = -1
+    # --- END OF CORRECTION ---
 
     # -----------------------------
-    # OVERALL METRICS
+    # CLOSED-SET METRICS (0,1,2 only)
     # -----------------------------
     print("\n" + "="*50)
-    print("### Overall Performance Metrics ###")
+    print("CLOSED-SET EVALUATION (LTE, BT LE, WLAN)")
+    print("="*50)
+
+    closed_mask = (true_labels < 3)
+    if np.sum(closed_mask) > 0:
+        y_true_closed = true_labels[closed_mask]
+        y_pred_closed = final_preds[closed_mask]
+
+        # Exclude samples that were predicted unknown (-1) from closed-set metrics
+        valid = (y_pred_closed != -1)
+        if np.any(valid):
+            acc_closed = accuracy_score(y_true_closed[valid], y_pred_closed[valid])
+            f1_closed = f1_score(y_true_closed[valid], y_pred_closed[valid], average='macro', zero_division=0)
+            prec_closed = precision_score(y_true_closed[valid], y_pred_closed[valid], average='macro', zero_division=0)
+            rec_closed = recall_score(y_true_closed[valid], y_pred_closed[valid], average='macro', zero_division=0)
+
+            print(f"Closed-set Accuracy: {acc_closed:.4f}")
+            print(f"Closed-set Macro F1: {f1_closed:.4f}")
+            print(f"Closed-set Macro Precision: {prec_closed:.4f}")
+            print(f"Closed-set Macro Recall: {rec_closed:.4f}")
+
+            cm_closed = confusion_matrix(y_true_closed[valid], y_pred_closed[valid], labels=[0,1,2])
+            print("Closed-set Confusion Matrix [LTE, BT LE, WLAN]:")
+            print(cm_closed)
+        else:
+            print("No valid closed-set predictions (all rejected by threshold).")
+    else:
+        print("No closed-set samples present in test set.")
+
+    # -----------------------------
+    # OPEN-SET DETECTION METRICS
+    # -----------------------------
+    print("\n" + "="*50)
+    print("OPEN-SET DETECTION (Known vs Unknown)")
+    print("="*50)
+
+    # For detection: treat known={0,1,2,3}, unknown={4}
+    true_binary = np.array([1 if l in (0,1,2,3) else 0 for l in true_labels])  # 1=known, 0=unknown
+
+    sens = recall_score(true_binary, open_known_pred, pos_label=1, zero_division=0)  # Sensitivity on known
+    spec = recall_score(true_binary, open_known_pred, pos_label=0, zero_division=0)  # Specificity on unknown
+    acc_detect = accuracy_score(true_binary, open_known_pred)
+    f1_detect = f1_score(true_binary, open_known_pred, average='binary', zero_division=0)
+    prec_detect = precision_score(true_binary, open_known_pred, average='binary', zero_division=0)
+    rec_detect = recall_score(true_binary, open_known_pred, average='binary', zero_division=0)
+
+    print(f"Known Detection Accuracy (Sensitivity/Recall): {sens:.4f}")
+    print(f"Unknown Detection Accuracy (Specificity): {spec:.4f}")
+    print(f"Open-set Detection Accuracy: {acc_detect:.4f}")
+    print(f"Open-set Detection F1: {f1_detect:.4f}")
+    print(f"Open-set Detection Precision: {prec_detect:.4f}")
+    
+    # -----------------------------
+    # 5-CLASS SUMMARY REPORT
+    # -----------------------------
+    print("\n" + "="*50)
+    print("5-CLASS SUMMARY (LTE, BT LE, WLAN, Zigbee, Unknown(DSSS))")
     print("="*50)
     
-    accuracy = accuracy_score(true_final_labels, final_preds)
-    f1 = f1_score(true_final_labels, final_preds, average='macro', zero_division=0)
-    precision = precision_score(true_final_labels, final_preds, average='macro', zero_division=0)
-    recall = recall_score(true_final_labels, final_preds, average='macro', zero_division=0)
+    y_true_5 = true_labels.copy()
+    y_pred_5 = final_preds.copy()
     
-    print(f"Overall Accuracy (incl. unknowns): {accuracy:.4f}")
-    print(f"Overall Macro F1-Score: {f1:.4f}")
-    print(f"Overall Macro Precision: {precision:.4f}")
-    print(f"Overall Macro Recall: {recall:.4f}")
+    # For the report, map the true unknown class (4) to the predicted unknown class (-1)
+    y_true_5[y_true_5 == 4] = -1
 
-    # Open vs. Closed Detection Accuracy
-    true_open_set_labels_binary = (true_labels < num_known_classes).astype(int)
-    known_acc = accuracy_score(true_open_set_labels_binary[true_open_set_labels_binary==1], open_known_pred[true_open_set_labels_binary==1])
-    unknown_acc = accuracy_score(true_open_set_labels_binary[true_open_set_labels_binary==0], open_known_pred[true_open_set_labels_binary==0])
-    
-    print(f"\nKnown Class Detection Accuracy (Sensitivity): {known_acc:.4f}")
-    print(f"Unknown Class Detection Accuracy (Specificity): {unknown_acc:.4f}")
-
-    # Confusion Matrix
-    print("\nConfusion Matrix (Rows: True, Cols: Pred)")
-    cm_labels = list(range(num_known_classes)) + [-1]
-    cm = confusion_matrix(true_final_labels, final_preds, labels=cm_labels)
-    
-    print("Labels:", [config.KNOWN_CLASSES_LIST[i] for i in range(num_known_classes)] + ['Unknown'])
-    print(cm)
+    cm_5 = confusion_matrix(y_true_5, y_pred_5, labels=[0,1,2,3,-1])
+    print("Labels order: [LTE(0), BT LE(1), WLAN(2), Zigbee(3), Unknown(-1)]")
+    print(cm_5)
 
 # ==============================================================================
 # MAIN EXECUTION BLOCK
@@ -214,6 +255,7 @@ if __name__ == '__main__':
             diffusion_model,
             diffusion_helper
         )
+
 
 
 
