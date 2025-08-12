@@ -142,65 +142,65 @@ def get_reconstruction_scores(loader, feature_extractor, diffusion_model, diffus
     all_scores = []
     all_labels = []
 
-with torch.no_grad():
-    for batch in tqdm(loader, desc="Calculating Reconstruction Scores"):
-        signals, labels = batch
-
-        signals = signals.to(device, non_blocking=True)
-        labels_np = labels.cpu().numpy()
-
-        batch_size = signals.size(0)
-
-        # 1) Conditioning from feature extractor (batched)
-        if use_amp:
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
+    with torch.no_grad():
+        for batch in tqdm(loader, desc="Calculating Reconstruction Scores"):
+            signals, labels = batch
+    
+            signals = signals.to(device, non_blocking=True)
+            labels_np = labels.cpu().numpy()
+    
+            batch_size = signals.size(0)
+    
+            # 1) Conditioning from feature extractor (batched)
+            if use_amp:
+                with torch.autocast(device_type='cuda', dtype=torch.float16):
+                    signals_freq = torch.fft.fft(signals)
+                    _, _, c = feature_extractor(signals, signals_freq)
+            else:
                 signals_freq = torch.fft.fft(signals)
                 _, _, c = feature_extractor(signals, signals_freq)
-        else:
-            signals_freq = torch.fft.fft(signals)
-            _, _, c = feature_extractor(signals, signals_freq)
-
-        # 2) Prepare shapes for diffusion
-        # signals: [B, T] complex -> reshape to [B, T, 1]
-        x0 = signals.reshape(batch_size, params['sample_rate'], params['input_dim'])
-
-        # 3) Build eval-time step schedule
-        total_steps = diffusion_helper.max_step
-        if use_max_step is None:
-            use_max_step_eff = total_steps
-        else:
-            use_max_step_eff = min(int(use_max_step), total_steps)
-
-        # Steps we will run: [use_max_step_eff-1, ..., 0], strided
-        step_list = list(range(use_max_step_eff - 1, -1, -1))[::step_stride]
-        if len(step_list) == 0:
-            # Fallback to at least the final step
-            step_list = [total_steps - 1]
-
-        # 4) Degrade to the first step in our schedule (typically max step)
-        t_first = torch.full((batch_size,), step_list, device=device, dtype=torch.long)
-        x_s = diffusion_helper.degrade_fn(x0, t_first)
-
-        # 5) Reverse diffusion along our step schedule
-        for idx, s in enumerate(step_list):
-            t_tensor = torch.full((batch_size,), s, device=device, dtype=torch.long)
-            x0_hat = diffusion_model(x_s, t_tensor, c)
-
-            # If there is a "next" coarser step in our strided schedule, degrade to it; else finish
-            if idx + 1 < len(step_list):
-                s_next = step_list[idx + 1]
-                t_next = torch.full((batch_size,), s_next, device=device, dtype=torch.long)
-                x_s = diffusion_helper.degrade_fn(x0_hat, t_next)
+    
+            # 2) Prepare shapes for diffusion
+            # signals: [B, T] complex -> reshape to [B, T, 1]
+            x0 = signals.reshape(batch_size, params['sample_rate'], params['input_dim'])
+    
+            # 3) Build eval-time step schedule
+            total_steps = diffusion_helper.max_step
+            if use_max_step is None:
+                use_max_step_eff = total_steps
             else:
-                x_s = x0_hat
-
-        # 6) Reconstruction error per sample (MSE over time/channel)
-        err = F.mse_loss(x0, x_s, reduction='none')   # [B, T, C]
-        err = err.view(batch_size, -1).mean(dim=1)    # [B]
-        all_scores.extend(err.detach().cpu().numpy())
-        all_labels.extend(labels_np)
-
-return np.array(all_scores), np.array(all_labels)
+                use_max_step_eff = min(int(use_max_step), total_steps)
+    
+            # Steps we will run: [use_max_step_eff-1, ..., 0], strided
+            step_list = list(range(use_max_step_eff - 1, -1, -1))[::step_stride]
+            if len(step_list) == 0:
+                # Fallback to at least the final step
+                step_list = [total_steps - 1]
+    
+            # 4) Degrade to the first step in our schedule (typically max step)
+            t_first = torch.full((batch_size,), step_list, device=device, dtype=torch.long)
+            x_s = diffusion_helper.degrade_fn(x0, t_first)
+    
+            # 5) Reverse diffusion along our step schedule
+            for idx, s in enumerate(step_list):
+                t_tensor = torch.full((batch_size,), s, device=device, dtype=torch.long)
+                x0_hat = diffusion_model(x_s, t_tensor, c)
+    
+                # If there is a "next" coarser step in our strided schedule, degrade to it; else finish
+                if idx + 1 < len(step_list):
+                    s_next = step_list[idx + 1]
+                    t_next = torch.full((batch_size,), s_next, device=device, dtype=torch.long)
+                    x_s = diffusion_helper.degrade_fn(x0_hat, t_next)
+                else:
+                    x_s = x0_hat
+    
+            # 6) Reconstruction error per sample (MSE over time/channel)
+            err = F.mse_loss(x0, x_s, reduction='none')   # [B, T, C]
+            err = err.view(batch_size, -1).mean(dim=1)    # [B]
+            all_scores.extend(err.detach().cpu().numpy())
+            all_labels.extend(labels_np)
+    
+    return np.array(all_scores), np.array(all_labels)
 
 # ==============================================================================
 # --------------------UTILITY FUNCTIONS ------------------
@@ -273,6 +273,7 @@ def calculate_model_size(model):
     print(f"Model size: {param_count * 4 / 1024 / 1024:.2f} MB (assuming 4 bytes per parameter)")
     
     return param_count, trainable_param_count
+
 
 
 
