@@ -151,7 +151,7 @@ with torch.no_grad():
 
         batch_size = signals.size(0)
 
-                # 1) Conditioning from feature extractor (batched)
+        # 1) Conditioning from feature extractor (batched)
         if use_amp:
             with torch.autocast(device_type='cuda', dtype=torch.float16):
                 signals_freq = torch.fft.fft(signals)
@@ -273,6 +273,7 @@ def calculate_model_size(model):
     print(f"Model size: {param_count * 4 / 1024 / 1024:.2f} MB (assuming 4 bytes per parameter)")
     
     return param_count, trainable_param_count
+
 
 
 
