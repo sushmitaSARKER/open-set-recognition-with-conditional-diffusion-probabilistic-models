@@ -28,60 +28,43 @@ def calculate_optimal_threshold(threshold_loader, feature_extractor, diffusion_m
     print("="*50)
     
     # Get reconstruction scores for the entire thresholding dataset
-    all_scores, all_labels, all_snrs = get_reconstruction_scores(
-        loader=threshold_loader,
-        feature_extractor=feature_extractor,
-        diffusion_model=diffusion_model,
-        diffusion_helper=diffusion_helper,
-        params=config.DIFFUSION_PARAMS
-    )
-    
-    # Debugging output
-    print(f"--- Sanity Checking Scores and Labels ---")
-    print(f"Number of scores calculated: {len(all_scores)}")
-    print(f"Number of NaN scores: {np.sum(np.isnan(all_scores))}")
-    print(f"Number of Inf scores: {np.sum(np.isinf(all_scores))}")
-    print(f"A few example scores: {all_scores[:10]}")
-    unique_labels, counts = np.unique(all_labels, return_counts=True)
-    labels_dict = dict(zip(unique_labels, counts))
-    print(f"Labels in threshold set: {labels_dict}")
-    print("-------------------------------------")
-    
-    # Create binary labels (1 for known, 0 for unknown)
-    true_binary_labels = np.array([1 if label < len(config.KNOWN_CLASSES_LIST) else 0 for label in all_labels])
-    unique_binary = np.unique(true_binary_labels)
-    print(f"Binary labels present: {unique_binary}")
-    
-    # Check if we have both classes for ROC calculation
-    if len(unique_binary) < 2:
-        print("❌ ERROR: Only one class present in threshold data!")
-        print("Cannot calculate ROC curve with only one class.")
-        print("Using 95th percentile of reconstruction errors as fallback threshold...")
-        
-        optimal_threshold = np.percentile(all_scores, 95)
-        print(f"\n--- Threshold Calculation Complete (Fallback) ---")
-        print(f"Fallback Threshold (95th percentile): {optimal_threshold:.6f}")
-        return optimal_threshold
-    
-    # Original ROC-based calculation
-    try:
-        fpr, tpr, thresholds = roc_curve(true_binary_labels, -np.array(all_scores))
-        j_scores = tpr - fpr
-        optimal_idx = np.argmax(j_scores)
-        optimal_threshold_score = thresholds[optimal_idx]
-        optimal_threshold = -optimal_threshold_score
-        
-        print(f"\n--- Threshold Calculation Complete ---")
-        print(f"Optimal Youden's Index: {j_scores[optimal_idx]:.4f}")
-        print(f"Optimal Threshold (Reconstruction Error): {optimal_threshold:.6f}")
-        return optimal_threshold
-        
-    except Exception as e:
-        print(f"❌ ERROR in ROC calculation: {e}")
-        print("Using 95th percentile fallback...")
-        optimal_threshold = np.percentile(all_scores, 95)
-        print(f"Fallback Threshold: {optimal_threshold:.6f}")
-        return optimal_threshold
+    all_scores, all_labels = get_reconstruction_scores(
+    loader=threshold_loader,
+    feature_extractor=feature_extractor,
+    diffusion_model=diffusion_model,
+    diffusion_helper=diffusion_helper,
+    params=config.DIFFUSION_PARAMS
+)
+
+# Debug
+unique, counts = np.unique(all_labels, return_counts=True)
+print(f"Threshold labels distribution: {dict(zip(unique, counts))}")
+print("Expected in threshold set: 0,1,2 (closed) and 3 (Zigbee)")
+
+# Binary labels for ROC: known=1 if in {0,1,2}; unknown=0 if label==3
+true_binary = np.array([1 if l in (0,1,2) else 0 for l in all_labels])
+
+if len(np.unique(true_binary)) < 2:
+    print("Only one class in threshold set. Using 95th-percentile fallback.")
+    thr = np.percentile(all_scores, 95)
+    print(f"Fallback threshold: {thr:.6f}")
+    np.savetxt("optimal_threshold.txt", [thr])
+    return thr
+
+# Reconstruction error low => known; pass negative to roc_curve
+fpr, tpr, thresholds = roc_curve(true_binary, -np.array(all_scores))
+j = tpr - fpr
+idx = np.argmax(j)
+optimal_threshold = -thresholds[idx]
+
+print("\n--- Threshold Calculation Complete ---")
+print(f"Optimal Youden's Index: {j[idx]:.4f}")
+print(f"Optimal Threshold (Reconstruction Error): {optimal_threshold:.6f}")
+
+np.savetxt("optimal_threshold.txt", [optimal_threshold])
+print("Saved optimal_threshold.txt")
+
+return optimal_threshold
 
 # ==============================================================================
 # SECTION 2: FINAL EVALUATION LOGIC
@@ -96,87 +79,118 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
     print("="*50)
     
     # get_reconstruction_scores now returns all_snrs as the third item
-    all_scores, true_labels, all_snrs = get_reconstruction_scores(
-        loader=test_loader,
-        feature_extractor=feature_extractor,
-        diffusion_model=diffusion_model,
-        diffusion_helper=diffusion_helper,
-        params=config.DIFFUSION_PARAMS
-    )
-    
-    # Apply threshold to get open-set predictions (known vs. unknown)
-    open_set_preds_binary = (all_scores < optimal_threshold).astype(int)
-    true_open_set_labels_binary = (true_labels < len(config.KNOWN_CLASSES_LIST)).astype(int)
-    
-    # For samples predicted as "known", get the specific class prediction
-    final_predictions = np.full_like(true_labels, -1)  # Default to -1 for unknown
-    
-    # Find indices of samples that were classified as "known"
-    known_indices = np.where(open_set_preds_binary == 1)[0]
-    
-    if len(known_indices) > 0:
-        print(f"Out of {len(all_scores)} test samples, {len(known_indices)} were classified as 'known'. Getting their specific class...")
-        
-        # Get the signals for these specific indices to run through the classifier
-        signals_to_classify = torch.stack([test_loader.dataset[i][0] for i in known_indices])
-        
-        with torch.no_grad():
-            device = next(feature_extractor.parameters()).device
-            signals_time = signals_to_classify.to(device)
-            signals_freq = torch.fft.fft(signals_time)
-            logits, _, _ = feature_extractor(signals_time, signals_freq)
-            closed_set_preds = logits[2].argmax(dim=1).cpu().numpy()
-            final_predictions[known_indices] = closed_set_preds
-    
-    # Calculate and Print Metrics
-    # Map true labels to the final format (-1 for all unknown classes)
-    true_final_labels = true_labels.copy()
-    true_final_labels[true_final_labels >= len(config.KNOWN_CLASSES_LIST)] = -1
-    
-    print("\n--- Overall Performance Metrics ---")
-    accuracy = accuracy_score(true_final_labels, final_predictions)
-    f1 = f1_score(true_final_labels, final_predictions, average='macro', zero_division=0)
-    precision = precision_score(true_final_labels, final_predictions, average='macro', zero_division=0)
-    recall = recall_score(true_final_labels, final_predictions, average='macro', zero_division=0)
-    
-    print(f"Overall Accuracy: {accuracy:.4f}")
-    print(f"Macro F1-Score: {f1:.4f}")
-    print(f"Macro Precision: {precision:.4f}")
-    print(f"Macro Recall: {recall:.4f}")
-    
-    # Open vs. Closed Accuracy
-    known_acc = accuracy_score(true_open_set_labels_binary[true_open_set_labels_binary==1], 
-                               open_set_preds_binary[true_open_set_labels_binary==1])
-    unknown_acc = accuracy_score(true_open_set_labels_binary[true_open_set_labels_binary==0], 
-                                 open_set_preds_binary[true_open_set_labels_binary==0])
-    
-    print(f"\nKnown Class Detection Accuracy (Sensitivity): {known_acc:.4f}")
-    print(f"Unknown Class Detection Accuracy (Specificity): {unknown_acc:.4f}")
-    
-    # Confusion Matrix
-    print("\nConfusion Matrix (Rows: True, Cols: Pred)")
-    cm_labels = list(range(len(config.KNOWN_CLASSES_LIST))) + [-1]
-    cm = confusion_matrix(true_final_labels, final_predictions, labels=cm_labels)
-    print("Labels:", [config.KNOWN_CLASSES_LIST[i] for i in range(len(config.KNOWN_CLASSES_LIST))] + ['Unknown'])
-    print(cm)
-    
-    # --- Per-SNR Analysis Loop ---
-    print("\n--- Per-SNR Performance Metrics ---")
-    snr_levels = sorted(np.unique(all_snrs))
-    print(f"{'SNR (dB)':<10}{'Accuracy':<12}{'F1-Score':<12}")
-    print("-" * 34)
-    
-    for snr in snr_levels:
-        snr_mask = (all_snrs == snr)
-        if np.sum(snr_mask) == 0: continue  # Skip if no samples for this SNR
-        
-        snr_true_labels = true_final_labels[snr_mask]
-        snr_final_preds = final_predictions[snr_mask]
-        
-        snr_accuracy = accuracy_score(snr_true_labels, snr_final_preds)
-        snr_f1 = f1_score(snr_true_labels, snr_final_preds, average='macro', zero_division=0)
-        
-        print(f"{snr:<10}{snr_accuracy:<12.4f}{snr_f1:<12.4f}")
+
+    all_scores, true_labels = get_reconstruction_scores(
+    loader=test_loader,
+    feature_extractor=feature_extractor,
+    diffusion_model=diffusion_model,
+    diffusion_helper=diffusion_helper,
+    params=config.DIFFUSION_PARAMS
+)
+
+unique, counts = np.unique(true_labels, return_counts=True)
+print(f"Test labels distribution: {dict(zip(unique, counts))}")
+print("Class map: 0=LTE, 1=BT LE, 2=WLAN, 3=Zigbee, 4=DSSS")
+
+# Open-set decision: 1=known if error<thr, else 0=unknown
+open_known_pred = (all_scores < optimal_threshold).astype(int)
+
+# We will produce a final 5-class prediction array:
+# - For samples predicted known, we classify into 0/1/2 using feature_extractor
+# - Zigbee (3) is considered known for open-set detection, but the classifier has num_classes=3
+#   so we only produce 0/1/2 predictions. We'll leave Zigbee as 3 in ground truth for reporting.
+final_preds = np.full_like(true_labels, -1)  # default unknown
+
+# Indices predicted as known
+known_idx = np.where(open_known_pred == 1)
+if len(known_idx) > 0:
+    print(f"{len(known_idx)}/{len(true_labels)} predicted as known -> classifying into 0/1/2...")
+    signals_to_classify = torch.stack([test_loader.dataset[i] for i in known_idx])
+    with torch.no_grad():
+        device = next(feature_extractor.parameters()).device
+        x_time = signals_to_classify.to(device)
+        x_freq = torch.fft.fft(x_time)
+        logits, _, _ = feature_extractor(x_time, x_freq)
+        cls = logits.argmax(dim=1).cpu().numpy()  # values in {0,1,2}[2]
+        final_preds[known_idx] = cls
+else:
+    print("No samples predicted as known by threshold.")
+
+# -----------------------------
+# CLOSED-SET METRICS (0,1,2 only)
+# -----------------------------
+print("\n" + "="*50)
+print("CLOSED-SET EVALUATION (LTE, BT LE, WLAN)")
+print("="*50)
+
+closed_mask = (true_labels < 3)
+if np.sum(closed_mask) > 0:
+    y_true_closed = true_labels[closed_mask]
+    y_pred_closed = final_preds[closed_mask]
+
+    # Exclude samples that were predicted unknown (-1) from closed-set metrics
+    valid = (y_pred_closed != -1)
+    if np.any(valid):
+        acc_closed = accuracy_score(y_true_closed[valid], y_pred_closed[valid])
+        f1_closed = f1_score(y_true_closed[valid], y_pred_closed[valid], average='macro', zero_division=0)
+        prec_closed = precision_score(y_true_closed[valid], y_pred_closed[valid], average='macro', zero_division=0)
+        rec_closed = recall_score(y_true_closed[valid], y_pred_closed[valid], average='macro', zero_division=0)
+
+        print(f"Closed-set Accuracy: {acc_closed:.4f}")
+        print(f"Closed-set Macro F1: {f1_closed:.4f}")
+        print(f"Closed-set Macro Precision: {prec_closed:.4f}")
+        print(f"Closed-set Macro Recall: {rec_closed:.4f}")
+
+        cm_closed = confusion_matrix(y_true_closed[valid], y_pred_closed[valid], labels=)[1][2]
+        print("Closed-set Confusion Matrix [LTE, BT LE, WLAN]:")
+        print(cm_closed)
+    else:
+        print("No valid closed-set predictions (all rejected by threshold).")
+else:
+    print("No closed-set samples present in test set.")
+
+# -----------------------------
+# OPEN-SET DETECTION METRICS
+# -----------------------------
+print("\n" + "="*50)
+print("OPEN-SET DETECTION (Known vs Unknown)")
+print("="*50)
+
+# For detection: treat known={0,1,2,3}, unknown={4}
+true_binary = np.array([1 if l in (0,1,2,3) else 0 for l in true_labels])  # 1=known, 0=unknown
+
+sens = accuracy_score(true_binary[true_binary==1], open_known_pred[true_binary==1])  # sensitivity on known
+spec = accuracy_score(true_binary[true_binary==0], open_known_pred[true_binary==0])  # specificity on unknown
+acc_detect = accuracy_score(true_binary, open_known_pred)
+f1_detect = f1_score(true_binary, open_known_pred, average='binary', zero_division=0)
+prec_detect = precision_score(true_binary, open_known_pred, average='binary', zero_division=0)
+rec_detect = recall_score(true_binary, open_known_pred, average='binary', zero_division=0)
+
+print(f"Known Detection Accuracy (Sensitivity): {sens:.4f}")
+print(f"Unknown Detection Accuracy (Specificity): {spec:.4f}")
+print(f"Open-set Detection Accuracy: {acc_detect:.4f}")
+print(f"Open-set Detection F1: {f1_detect:.4f}")
+print(f"Open-set Detection Precision: {prec_detect:.4f}")
+print(f"Open-set Detection Recall: {rec_detect:.4f}")
+
+# -----------------------------
+# 5-CLASS SUMMARY REPORT
+# -----------------------------
+print("\n" + "="*50)
+print("5-CLASS SUMMARY (LTE, BT LE, WLAN, Zigbee, Unknown(DSSS))")
+print("="*50)
+
+# Map predictions: classifier only outputs 0/1/2; leave Zigbee/DSSS logic as is:
+# True labels remain {0,1,2,3,4}. Preds are {0,1,2,-1}. We’ll keep -1 as Unknown for DSSS.
+y_true_5 = true_labels.copy()
+y_pred_5 = final_preds.copy()
+# When true is Zigbee (3): 
+#  - if threshold kept it (pred != -1) but classifier can only say 0/1/2, so it will likely count as misclass.
+#  - this is expected; we still show the confusion.
+
+cm_5 = confusion_matrix(y_true_5, y_pred_5, labels=[0,1,2,3,-1])
+print("Labels order: [LTE(0), BT LE(1), WLAN(2), Zigbee(3), Unknown(-1/DSSS)]")
+print(cm_5)
 
 # ==============================================================================
 # MAIN EXECUTION BLOCK
@@ -235,4 +249,5 @@ if __name__ == '__main__':
             diffusion_model,
             diffusion_helper
         )
+
 
