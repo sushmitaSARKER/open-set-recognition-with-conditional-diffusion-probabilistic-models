@@ -130,14 +130,6 @@ def train_diffusion_epoch(diffusion_model, feature_extractor, loader, optimizer,
 # PHASE 3 & 4: INFERENCE AND SCORE CALCULATION LOGIC
 # ==============================================================================
 
-# In engine.py
-
-import torch
-import torch.nn.functional as F
-import numpy as np
-from tqdm import tqdm
-import config # Make sure config is imported
-
 def get_reconstruction_scores(loader, feature_extractor, diffusion_model, diffusion_helper, params):
     """
     Calculates reconstruction error (anomaly score) for all samples in a dataloader.
@@ -294,6 +286,7 @@ def calculate_model_size(model):
     print(f"Model size: {param_count * 4 / 1024 / 1024:.2f} MB (assuming 4 bytes per parameter)")
     
     return param_count, trainable_param_count
+
 
 
 
