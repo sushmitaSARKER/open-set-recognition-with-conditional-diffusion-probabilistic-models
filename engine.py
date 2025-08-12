@@ -140,48 +140,49 @@ def get_reconstruction_scores(loader, feature_extractor, diffusion_model, diffus
     diffusion_model.eval()
     
     all_scores = []
-    all_labels = []
-    all_snrs = []
-    
-    with torch.no_grad():
-        for signals, labels, snrs in tqdm(loader, desc="Calculating Reconstruction Scores"):
-            batch_size = signals.shape[0]
-            signals = signals.to(device)
-            
-            # Process entire batch at once for feature extraction
-            signals_freq = torch.fft.fft(signals)
-            _, _, c = feature_extractor(signals, signals_freq)
-            
-            # Reshape signals for diffusion processing
-            signals_reshaped = signals.reshape(batch_size, params['sample_rate'], params['input_dim'])
-            
-            # Batch denoising process
-            t_max = torch.full((batch_size,), diffusion_helper.max_step - 1, device=device)
-            x_t = diffusion_helper.degrade_fn(signals_reshaped, t_max)
-            x_s = x_t
-            
-            # Reverse diffusion process (batch-wise)
-            for s in range(diffusion_helper.max_step - 1, -1, -1):
-                t_tensor = torch.full((batch_size,), s, device=device)
-                predicted_x_0 = diffusion_model(x_s, t_tensor, c)
-                
-                if s > 0:
-                    t_prev = torch.full((batch_size,), s - 1, device=device)
-                    x_s = diffusion_helper.degrade_fn(predicted_x_0, t_prev)
-                else:
-                    x_s = predicted_x_0
-            
-            # Calculate reconstruction errors for the batch
-            errors = F.mse_loss(signals_reshaped, x_s, reduction='none')
-            errors = errors.view(batch_size, -1).mean(dim=1)  # Average over signal dimensions
-            
-            # Store results
-            all_scores.extend(errors.cpu().numpy())
-            all_labels.extend(labels.numpy())
-            all_snrs.extend(snrs.numpy())
-    
-    return np.array(all_scores), np.array(all_labels), np.array(all_snrs)
+all_labels = []
 
+with torch.no_grad():
+    for batch in tqdm(loader, desc="Calculating Reconstruction Scores"):
+        signals, labels = batch
+
+        signals = signals.to(device, non_blocking=True)
+        labels_np = labels.cpu().numpy()
+
+        B = signals.shape
+
+        # Compute conditioning c for the whole batch
+        signals_freq = torch.fft.fft(signals)
+        _, _, c = feature_extractor(signals, signals_freq)
+
+        # Reshape to [B, sample_rate, 1]
+        x0 = signals.reshape(B, params['sample_rate'], params['input_dim'])
+
+        # Degrade once to max step
+        t_max = torch.full((B,), diffusion_helper.max_step - 1, device=device, dtype=torch.long)
+        x_t = diffusion_helper.degrade_fn(x0, t_max)
+
+        # Reverse diffusion, batched
+        x_s = x_t
+        for s in range(diffusion_helper.max_step - 1, -1, -1):
+            t_tensor = torch.full((B,), s, device=device, dtype=torch.long)
+            x0_hat = diffusion_model(x_s, t_tensor, c)
+            if s > 0:
+                t_prev = torch.full((B,), s - 1, device=device, dtype=torch.long)
+                x_s = diffusion_helper.degrade_fn(x0_hat, t_prev)
+            else:
+                x_s = x0_hat
+
+        # Reconstruction error per sample
+        # x0, x_s both [B, T, C]; compute MSE over (T,C), reduce='none' then mean over dims
+        errors = F.mse_loss(x0, x_s, reduction='none')  # [B, T, C]
+        errors = err.view(B, -1).mean(dim=1)            # [B]
+
+        # Store results
+        all_scores.extend(err.detach().cpu().numpy())
+        all_labels.extend(labels_np)
+
+return np.array(all_scores), np.array(all_labels)
 
 # ==============================================================================
 # --------------------UTILITY FUNCTIONS ------------------
@@ -254,6 +255,7 @@ def calculate_model_size(model):
     print(f"Model size: {param_count * 4 / 1024 / 1024:.2f} MB (assuming 4 bytes per parameter)")
     
     return param_count, trainable_param_count
+
 
 
 
