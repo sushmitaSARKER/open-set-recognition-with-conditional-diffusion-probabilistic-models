@@ -64,3 +64,21 @@ PATHS = {
     'feature_extractor': 'disentangled_feature_extractor.pt',
     'diffusion_model': 'conditional_diffusion_model.pt'
 }
+
+
+# --- OPTIONAL: EVALUATION SPEED-UP PARAMETERS ---
+# Set to an integer (e.g., 50) to run fewer reconstruction steps for a quick evaluation.
+# Set to None to run the full number of steps.
+EVAL_DIFFUSION_MAX_STEP = None
+# Set to an integer > 1 (e.g., 5) to skip steps during reconstruction for a faster (but less accurate) result.
+EVAL_DIFFUSION_STRIDE = 1
+# Set to True to enable Automatic Mixed Precision for the Feature Extractor during evaluation.
+EVAL_ENABLE_AMP_FE = True
+
+ 
+#---------- DEBUGGING PARAMETERS ---------------
+DEBUG_MODE = False # set to true to enable fast debugging, False for full runs
+DEBUG_SUBSET_SIZE = 1000 #Number of samples to use for debugging (e.g., 1000)
+DEBUG_RECONSTRUCTION_STEPS = 10 #Number of denoising steps for faster inference (e.g., 10 out of 300)
+ 
+
