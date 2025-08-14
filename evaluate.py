@@ -36,35 +36,35 @@ def calculate_optimal_threshold(threshold_loader, feature_extractor, diffusion_m
     params=config.DIFFUSION_PARAMS
 )
 
-# Debug
-unique, counts = np.unique(all_labels, return_counts=True)
-print(f"Threshold labels distribution: {dict(zip(unique, counts))}")
-print("Expected in threshold set: 0,1,2 (closed) and 3 (Zigbee)")
-
-# Binary labels for ROC: known=1 if in {0,1,2}; unknown=0 if label==3
-true_binary = np.array([1 if l in (0,1,2) else 0 for l in all_labels])
-
-if len(np.unique(true_binary)) < 2:
-    print("Only one class in threshold set. Using 95th-percentile fallback.")
-    thr = np.percentile(all_scores, 95)
-    print(f"Fallback threshold: {thr:.6f}")
-    np.savetxt("optimal_threshold.txt", [thr])
-    return thr
-
-# Reconstruction error low => known; pass negative to roc_curve
-fpr, tpr, thresholds = roc_curve(true_binary, -np.array(all_scores))
-j = tpr - fpr
-idx = np.argmax(j)
-optimal_threshold = -thresholds[idx]
-
-print("\n--- Threshold Calculation Complete ---")
-print(f"Optimal Youden's Index: {j[idx]:.4f}")
-print(f"Optimal Threshold (Reconstruction Error): {optimal_threshold:.6f}")
-
-np.savetxt("optimal_threshold.txt", [optimal_threshold])
-print("Saved optimal_threshold.txt")
-
-return optimal_threshold
+    # Debug
+    unique, counts = np.unique(all_labels, return_counts=True)
+    print(f"Threshold labels distribution: {dict(zip(unique, counts))}")
+    print("Expected in threshold set: 0,1,2 (closed) and 3 (Zigbee)")
+    
+    # Binary labels for ROC: known=1 if in {0,1,2}; unknown=0 if label==3
+    true_binary = np.array([1 if l in (0,1,2) else 0 for l in all_labels])
+    
+    if len(np.unique(true_binary)) < 2:
+        print("Only one class in threshold set. Using 95th-percentile fallback.")
+        thr = np.percentile(all_scores, 95)
+        print(f"Fallback threshold: {thr:.6f}")
+        np.savetxt("optimal_threshold.txt", [thr])
+        return thr
+    
+    # Reconstruction error low => known; pass negative to roc_curve
+    fpr, tpr, thresholds = roc_curve(true_binary, -np.array(all_scores))
+    j = tpr - fpr
+    idx = np.argmax(j)
+    optimal_threshold = -thresholds[idx]
+    
+    print("\n--- Threshold Calculation Complete ---")
+    print(f"Optimal Youden's Index: {j[idx]:.4f}")
+    print(f"Optimal Threshold (Reconstruction Error): {optimal_threshold:.6f}")
+    
+    np.savetxt("optimal_threshold.txt", [optimal_threshold])
+    print("Saved optimal_threshold.txt")
+    
+    return optimal_threshold
 
 # ==============================================================================
 # SECTION 2: FINAL EVALUATION LOGIC
@@ -98,15 +98,13 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
     # Default all predictions to -1 (unknown)
     final_preds = np.full_like(true_labels, -1)
 
-    # --- START OF CORRECTION ---
-
-    # FIX 1: Get the array of indices from the tuple returned by np.where by adding [0]
+    #Get the array of indices from the tuple returned by np.where by adding [0]
     known_idx = np.where(open_known_pred == 1)[0]
 
     if known_idx.size > 0:
         print(f"{known_idx.size}/{len(true_labels)} predicted as known -> classifying into 0/1/2...")
         
-        # FIX 2: Select only the signal tensor (the 0th element) from the dataset's returned tuple
+        #Select only the signal tensor (the 0th element) from the dataset's returned tuple
         signals_to_classify = torch.stack([test_loader.dataset[i][0] for i in known_idx])
         
         with torch.no_grad():
@@ -123,7 +121,7 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
     else:
         print("No samples predicted as known by threshold.")
 
-    # --- END OF CORRECTION ---
+   
 
     # -----------------------------
     # CLOSED-SET METRICS (0,1,2 only)
@@ -191,10 +189,14 @@ def run_final_evaluation(test_loader, optimal_threshold, feature_extractor, diff
     y_true_5 = true_labels.copy()
     y_pred_5 = final_preds.copy()
     
-    # For the report, map the true unknown class (4) to the predicted unknown class (-1)
-    y_true_5[y_true_5 == 4] = -1
+    # # For the report, map the true unknown class (4) to the predicted unknown class (-1)
+    # y_true_5[y_true_5 == 4] = -1
 
-    cm_5 = confusion_matrix(y_true_5, y_pred_5, labels=[0,1,2,3,-1])
+    # Treat BOTH 3 and 4 as the true "Unknown" class for this specific evaluation goal
+    y_true_5[y_true_5 == 3] = -1 # Map true Zigbee to Unknown
+    y_true_5[y_true_5 == 4] = -1 # Map true DSSS to Unknown
+
+    cm_5 = confusion_matrix(y_true_5, y_pred_5, labels=[0,1,2,-1])
     print("Labels order: [LTE(0), BT LE(1), WLAN(2), Zigbee(3), Unknown(-1)]")
     print(cm_5)
 
@@ -255,6 +257,7 @@ if __name__ == '__main__':
             diffusion_model,
             diffusion_helper
         )
+
 
 
 
