@@ -1,5 +1,6 @@
 import torch
-import math
+import torch as nn
+import torch.nn.functional as F
 
 
 class SignalDiffusion(nn.Module):
@@ -18,3 +19,4 @@ class SignalDiffusion(nn.Module):
         noise_weight = torch.sqrt(1.0 - alpha_bar_on_device[t_device])
         noise = torch.randn_like(x_0)
         return x_0 * info_weight.view(-1, 1, 1) + noise * noise_weight.view(-1, 1, 1)
+
