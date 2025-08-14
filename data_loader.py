@@ -33,17 +33,17 @@ def load_and_process_single_file(file_path):
 
 # --- DATASET CLASS ---
 class SignalDataset(Dataset):
-    """Custom PyTorch Dataset to handle signals, labels, and SNRs."""
-    def __init__(self, signals, labels, snrs):
+    """Custom PyTorch Dataset to handle signals, labels."""
+    def __init__(self, signals, labels):
         self.signals = signals
         self.labels = labels
-        self.snrs = snrs
+        # self.snrs = snrs
 
     def __len__(self):
         return len(self.signals)
 
     def __getitem__(self, idx):
-        return self.signals[idx], self.labels[idx], self.snrs[idx]
+        return self.signals[idx], self.labels[idx]
 
 def prepare_all_data():
     """
@@ -215,4 +215,5 @@ def prepare_test_loader(batch_size):
     print(f"==============================")
     
     return test_loader
+
 
