@@ -29,13 +29,17 @@ def run_phase1_training():
     
     # We only need the training loader for this phase.
     # The dataloader will automatically be configured to only use the KNOWN classes.
-     train_loader, _ = prepare_train_and_threshold_loaders(config.TRAINING_PARAMS['batch_size'])
+    train_loader, _ = prepare_train_and_threshold_loaders(config.TRAINING_PARAMS['batch_size'])
     
     # Instantiate model, losses, and optimizer
     model = DisentangledFeatureExtractor(
         num_classes=config.FEATURE_EXTRACTOR_PARAMS['num_classes'],
         feature_dim=config.FEATURE_EXTRACTOR_PARAMS['feature_dim']
     ).to(device)
+
+    print("\n----Feature Extractor Model Info------")
+    calculate_model_size(model)
+    print("-------------------")
     
     loss_fns = {
         'ce': nn.CrossEntropyLoss(),
@@ -53,7 +57,7 @@ def run_phase1_training():
         if (epoch + 1) % 5 == 0:
             engine.save_checkpoint(model, optimizer, epoch, avg_loss, f"checkpoint_fe_epoch_{epoch+1}.pt")
         
-    # 4. Save the final trained model
+    # Save the final trained model
     torch.save(model.state_dict(), config.PATHS['feature_extractor'])
     print(f"\n--- Phase 1 Complete. Feature extractor saved to '{config.PATHS['feature_extractor']}' ---")
 
@@ -88,8 +92,13 @@ def run_phase2_training():
     feature_extractor.load_state_dict(torch.load(config.PATHS['feature_extractor'], map_location=device))
     feature_extractor.eval() # Set to evaluation mode; its weights are frozen
     
-    # 3. Instantiate the diffusion model and its helpers
+    # Instantiate the diffusion model and its helpers
     diffusion_model = tfdiff_WiFi(config.DIFFUSION_PARAMS).to(device)
+
+    print("\n----Diffusion Model Info------")
+    calculate_model_size(diffusion_model)
+    print("-------------------")
+    
     diffusion_helper = SignalDiffusion(config.DIFFUSION_PARAMS)
     
     loss_fn = nn.MSELoss()
@@ -109,7 +118,7 @@ def run_phase2_training():
         )
         print(f"Epoch {epoch+1}/{config.TRAINING_PARAMS['phase2_epochs']} -> Avg Diffusion Loss: {avg_loss:.6f}")
         
-    # 5. Save the final trained model
+    # Save the final trained model
     torch.save(diffusion_model.state_dict(), config.PATHS['diffusion_model'])
     print(f"\n--- Phase 2 Complete. Diffusion model saved to '{config.PATHS['diffusion_model']}' ---")
 
@@ -128,4 +137,5 @@ if __name__ == '__main__':
         run_phase1_training()
     elif args.phase == 2:
         run_phase2_training()
+
 
