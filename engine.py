@@ -7,123 +7,95 @@ from tqdm import tqdm
 # PHASE 1: FEATURE EXTRACTOR TRAINING LOGIC
 # ==============================================================================
 
-def train_fe_epoch(model, loader, optimizer, loss_fns, device, scheduler=None):
+def train_fe_epoch(model, loader, optimizer, loss_fns, device):
+
     """
-    Enhanced training epoch for the Disentangled Feature Extractor.
+    Runs a single training epoch for the Disentangled Feature Extractor.
+    Args:
+        model (nn.Module): The DisentangledFeatureExtractor model.
+        loader (DataLoader): The training DataLoader (known classes only).
+        optimizer (torch.optim.Optimizer): The optimizer.
+        loss_fns (dict): A dictionary containing 'ce' (CrossEntropy) and 'cos' (CosineSimilarity) losses.
+        device (torch.device): The device to train on ('cuda' or 'cpu').
+    Returns:
+        tuple: Average loss and accuracy for the epoch.
     """
+
     model.train()
     total_loss, total_acc, count = 0, 0, 0
-    
-    # Use mixed precision for faster training
-    scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
-    
-    for signals, labels, snrs in tqdm(loader, desc="Training FE Epoch"):
+    for signals, labels in tqdm(loader, desc="Training FE Epoch"):
         optimizer.zero_grad()
-        signals, labels = signals.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+        signals, labels = signals.to(device), labels.to(device)
+        x_time = signals
+        x_freq = torch.fft.fft(signals)
+        logits_list, features_list, _ = model(x_time, x_freq)
+        loss_t = loss_fns['ce'](logits_list[0], labels)
+        loss_f = loss_fns['ce'](logits_list[1], labels)
+        loss_comb = loss_fns['ce'](logits_list[2], labels)
+        loss_cos = loss_fns['cos'](features_list[0], features_list[1])
         
-        if scaler:
-            with torch.cuda.amp.autocast():
-                x_time = signals
-                x_freq = torch.fft.fft(signals)
-                logits_list, features_list, _ = model(x_time, x_freq)
-                
-                loss_t = loss_fns['ce'](logits_list[0], labels)
-                loss_f = loss_fns['ce'](logits_list[1], labels)
-                loss_comb = loss_fns['ce'](logits_list[2], labels)
-                loss_cos = loss_fns['cos'](features_list[0], features_list[1])
-                
-                # Improved loss weighting
-                loss = loss_t + loss_f + loss_comb + 0.5 * torch.abs(loss_cos)
-            
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            x_time = signals
-            x_freq = torch.fft.fft(signals)
-            logits_list, features_list, _ = model(x_time, x_freq)
-            
-            loss_t = loss_fns['ce'](logits_list[0], labels)
-            loss_f = loss_fns['ce'](logits_list[1], labels)
-            loss_comb = loss_fns['ce'](logits_list[2], labels)
-            loss_cos = loss_fns['cos'](features_list[0], features_list[1])
-            
-            loss = loss_t + loss_f + loss_comb + 0.5 * torch.abs(loss_cos)
-            loss.backward()
-            optimizer.step()
+        # Total loss: We want to MINIMIZE cross-entropy and MAXIMIZE cosine similarity (difference)
+        # Maximizing cosine similarity is the same as minimizing its negative.
+        # However, the paper aims to make features ORTHOGONAL, meaning cosine similarity should be close to 0.
+        # Therefore, we treat its absolute value as a penalty.
+        loss = loss_t + loss_f + loss_comb + 0.5 * torch.abs(loss_cos)
+        loss.backward()
         
-        if scheduler:
-            scheduler.step()
+        # Add gradient clipping to prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
         
         total_loss += loss.item()
         total_acc += (logits_list[2].argmax(dim=1) == labels).sum().item()
         count += len(labels)
-    
+
     avg_loss = total_loss / len(loader)
     avg_acc = total_acc / count
-    
+
     return avg_loss, avg_acc
-
-
+ 
 # ==============================================================================
 # PHASE 2: CONDITIONAL DIFFUSION MODEL TRAINING LOGIC
 # ==============================================================================
 
-def train_diffusion_epoch(diffusion_model, feature_extractor, loader, optimizer, loss_fn, diffusion_helper, params, device, scheduler=None):
+def train_diffusion_epoch(diffusion_model, feature_extractor, loader, optimizer, loss_fn, diffusion_helper, params, device):
+
     """
-    Enhanced training epoch for the Conditional RF-Diffusion model.
+    Runs a single training epoch for the Conditional RF-Diffusion model.
     """
+    
     diffusion_model.train()
-    feature_extractor.eval()
+    feature_extractor.eval() # Feature extractor is frozen
     total_loss = 0
-    
-    scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
-    
-    for signals, labels, snrs in tqdm(loader, desc="Training Diffusion Epoch"):
+
+    for signals, labels in tqdm(loader, desc="Training Diffusion Epoch"):
         optimizer.zero_grad()
-        x_0 = signals.to(device, non_blocking=True)
-        
+        x_0 = signals.to(device)
+
         # Get the conditioning vector 'c' from the trained feature extractor
         with torch.no_grad():
             x_freq = torch.fft.fft(x_0)
             _, _, c = feature_extractor(x_0, x_freq)
-        
-        if scaler:
-            with torch.cuda.amp.autocast():
-                # Random timestep sampling
-                t = torch.randint(0, diffusion_helper.max_step, (x_0.shape[0],), device=device)
-                x_0_reshaped = x_0.reshape(x_0.shape[0], params['sample_rate'], params['input_dim'])
-                x_t = diffusion_helper.degrade_fn(x_0_reshaped, t)
-                
-                predicted_x_0 = diffusion_model(x_t, t, c)
-                loss = loss_fn(predicted_x_0, x_0_reshaped)
-            
-            scaler.scale(loss).backward()
-            # Gradient clipping for stable training
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(diffusion_model.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            t = torch.randint(0, diffusion_helper.max_step, (x_0.shape[0],), device=device)
-            x_0_reshaped = x_0.reshape(x_0.shape[0], params['sample_rate'], params['input_dim'])
-            x_t = diffusion_helper.degrade_fn(x_0_reshaped, t)
-            
-            predicted_x_0 = diffusion_model(x_t, t, c)
-            loss = loss_fn(predicted_x_0, x_0_reshaped)
-            loss.backward()
-            
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(diffusion_model.parameters(), max_norm=1.0)
-            optimizer.step()
-        
-        if scheduler:
-            scheduler.step()
-        
+ 
+        # Perform one step of diffusion training
+        t = torch.randint(0, diffusion_helper.max_step, (x_0.shape[0],), device=device)
+        x_0_reshaped = x_0.reshape(x_0.shape[0], params['sample_rate'], params['input_dim'])
+        x_t = diffusion_helper.degrade_fn(x_0_reshaped, t)
+
+        # Predict the original signal
+        predicted_x_0 = diffusion_model(x_t, t, c)
+
+        #Calculate the complex MSE loss manually
+        # this is equivalent to torch.mean(torch.abs(target-prediction)**2)
+        diff = predicted_x_0 - x_0_reshaped
+        loss = torch.mean(torch.mul(diff.real, diff.real) + torch.mul(diff.imag, diff.imag))
+        loss.backward()
+        optimizer.step()
         total_loss += loss.item()
-    
+
     avg_loss = total_loss / len(loader)
     return avg_loss
+ 
 
 
 # ==============================================================================
@@ -143,7 +115,7 @@ def get_reconstruction_scores(loader, feature_extractor, diffusion_model, diffus
     diffusion_model.eval()
     all_scores = []
     all_labels = []
-    # If your loader provides SNRs, you can add: all_snrs = []
+    # If loader provides SNRs, you can add: all_snrs = []
 
     # --- Get optional evaluation speed-up parameters from the config file ---
     use_max_step = getattr(config, 'EVAL_DIFFUSION_MAX_STEP', None)
@@ -227,7 +199,7 @@ def validate_model(model, loader, loss_fns, device):
     total_loss, total_acc, count = 0, 0, 0
     
     with torch.no_grad():
-        for signals, labels, snrs in tqdm(loader, desc="Validation"):
+        for signals, labels in tqdm(loader, desc="Validation"):
             signals, labels = signals.to(device, non_blocking=True), labels.to(device, non_blocking=True)
             
             x_time = signals
@@ -286,6 +258,7 @@ def calculate_model_size(model):
     print(f"Model size: {param_count * 4 / 1024 / 1024:.2f} MB (assuming 4 bytes per parameter)")
     
     return param_count, trainable_param_count
+
 
 
 
